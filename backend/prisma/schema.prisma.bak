@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// El conector sqlserver de Prisma no soporta el tipo `enum` ("the current
+// connector does not support enums"), a diferencia de postgresql. Los valores
+// permitidos para Role/TipoClase/TipoRequisito/EstadoHistorial/OrigenHistorial
+// se modelan como `String` acotado y se validan en el Back-End con los
+// objetos equivalentes definidos en `src/common/enums.ts` (mismo nombre y
+// forma que los enums que antes generaba `@prisma/client`, para minimizar
+// cambios en el resto del código).
+
+model User {
+  id                  String    @id @default(uuid()) @db.NVarChar(36)
+  email               String    @unique @db.NVarChar(255)
+  passwordHash        String
+  role                String    @db.NVarChar(20)
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  sessions Session[]
+
+  // Plantilla de malla curricular que el estudiante está cursando actualmente.
+  // Nula para administradores y para estudiantes aún no asignados a ninguna.
+  // onDelete/onUpdate NoAction: el servicio ya impide borrar una plantilla
+  // con estudiantes asignados (eliminarPlantilla); el FK solo refuerza esa
+  // invariante en vez de delegarle a la BD un SetNull silencioso.
+  plantillaMallaId String?         @db.NVarChar(36)
+  plantillaMalla   PlantillaMalla? @relation(fields: [plantillaMallaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Datos administrativos del estudiante. Nulos hasta que un admin los registre.
+  nombreCompleto    String?
+  codigoEstudiantil String? @unique @db.NVarChar(50)
+
+  historial     HistorialAcademico[]
+  inscripciones Inscripcion[]
+
+  @@index([plantillaMallaId])
+  @@map("users")
+}
+
+model Carrera {
+  id        String   @id @default(uuid()) @db.NVarChar(36)
+  nombre    String   @unique @db.NVarChar(150)
+  codigo    String   @unique @db.NVarChar(20)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plantillas PlantillaMalla[]
+
+  @@map("carreras")
+}
+
+// Una "plantilla" es una versión inmutable-en-la-práctica de la malla de una
+// carrera. Editar clases/requisitos de una plantilla que ya tiene estudiantes
+// asignados es intencional (edición en vivo); para cambios de fondo que no
+// deben afectar a quienes ya cursan, se duplica en una nueva versión en vez
+// de mutar la vigente.
+model PlantillaMalla {
+  id                String   @id @default(uuid()) @db.NVarChar(36)
+  carreraId         String   @db.NVarChar(36)
+  nombre            String   @db.NVarChar(150)
+  version           Int      @default(1)
+  activa            Boolean  @default(true)
+  plantillaOrigenId String?  @db.NVarChar(36)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  carrera Carrera @relation(fields: [carreraId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Auto-referencia: SQL Server exige que una self-relation fije NoAction en
+  // ambas acciones de uno de los lados.
+  plantillaOrigen PlantillaMalla?  @relation("VersionesPlantilla", fields: [plantillaOrigenId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  versiones       PlantillaMalla[] @relation("VersionesPlantilla")
+  clases          Clase[]
+  estudiantes     User[]
+
+  @@unique([carreraId, nombre, version])
+  @@index([carreraId])
+  @@map("plantillas_malla")
+}
+
+model Clase {
+  id                  String  @id @default(uuid()) @db.NVarChar(36)
+  plantillaId         String  @db.NVarChar(36)
+  codigo              String  @db.NVarChar(20)
+  nombre              String
+  unidadesValorativas Int
+  nivel               Int
+  tipo                String  @default("OBLIGATORIA") @db.NVarChar(20)
+  // Posición del nodo en el editor visual (canvas). Nula hasta que el admin
+  // lo posicione manualmente o se aplique "auto-ordenar por nivel"; el
+  // Front-End calcula un layout por defecto mientras tanto.
+  posX                Float?
+  posY                Float?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  plantilla PlantillaMalla @relation(fields: [plantillaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  // Relaciones donde ESTA clase exige otra (sus prerrequisitos/correquisitos).
+  requisitosPropios RelacionRequisito[] @relation("ClaseConRequisito")
+  // Relaciones donde ESTA clase es exigida por otra.
+  esRequisitoDe     RelacionRequisito[] @relation("ClaseEsRequisito")
+
+  historial     HistorialAcademico[]
+  inscripciones Inscripcion[]
+
+  @@unique([plantillaId, codigo])
+  @@index([plantillaId])
+  @@map("clases")
+}
+
+model RelacionRequisito {
+  id          String   @id @default(uuid()) @db.NVarChar(36)
+  claseId     String   @db.NVarChar(36)
+  requisitoId String   @db.NVarChar(36)
+  tipo        String   @db.NVarChar(20)
+  createdAt   DateTime @default(now())
+
+  // SQL Server rechaza dos FK con CASCADE hacia la misma tabla (Clase) desde
+  // esta tabla ("multiple cascade paths"). El cascade queda solo en el lado
+  // `clase`; el lado `requisito` usa NoAction, por lo que eliminarClase() en
+  // curriculum.service.ts limpia a mano las relaciones donde la clase
+  // aparece como requisito antes de borrarla.
+  clase     Clase @relation("ClaseConRequisito", fields: [claseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  requisito Clase @relation("ClaseEsRequisito", fields: [requisitoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([claseId, requisitoId, tipo])
+  @@index([claseId])
+  @@index([requisitoId])
+  @@map("relaciones_requisito")
+}
+
+// Un registro histórico por cada intento de un estudiante en una clase
+// concreta (de una versión concreta de plantilla). Se referencia por
+// `claseId` puntual; al cruzar contra la malla vigente del estudiante, el
+// cruce se hace por `codigo` de clase (no por id), para que aprobar una
+// materia en la versión anterior de la plantilla siga contando si el
+// estudiante es reasignado a una versión nueva con el mismo código.
+model HistorialAcademico {
+  id        String   @id @default(uuid()) @db.NVarChar(36)
+  userId    String   @db.NVarChar(36)
+  claseId   String   @db.NVarChar(36)
+  estado    String   @db.NVarChar(20)
+  nota      Float?
+  periodo   String   @db.NVarChar(20)
+  origen    String   @default("ADMIN") @db.NVarChar(20)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clase Clase @relation(fields: [claseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, claseId, periodo])
+  @@index([userId])
+  @@index([claseId])
+  @@map("historial_academico")
+}
+
+// Selección/inscripción del estudiante para un período académico. Cada fila
+// es una clase inscrita; el período activo lo calcula el Back-End (no lo
+// decide el cliente) para no depender de un valor arbitrario enviado por el
+// Front-End.
+model Inscripcion {
+  id        String   @id @default(uuid()) @db.NVarChar(36)
+  userId    String   @db.NVarChar(36)
+  claseId   String   @db.NVarChar(36)
+  periodo   String   @db.NVarChar(20)
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clase Clase @relation(fields: [claseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, claseId, periodo])
+  @@index([userId])
+  @@index([claseId])
+  @@map("inscripciones")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.NVarChar(36)
+  userId           String    @db.NVarChar(36)
+  refreshTokenHash String
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("sessions")
+}

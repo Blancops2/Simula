@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// Este schema refleja 1:1 la base de datos real (ver DDL.sql / esquema-simula.mwb).
+// Los nombres de columna/tabla se mantienen exactamente iguales a la BD (sin
+// @map) para que no haya ambigüedad entre lo que ve Prisma y lo que hay en
+// SQL Server; solo se renombran los nombres de campo de relación (en
+// minúscula, convención de Prisma) ya que esos no existen como columnas.
+
+model Facultad {
+  idFacultad  String    @id(map: "PK_Facultad") @db.VarChar(45)
+  nombre      String?   @db.VarChar(45)
+  descripcion String?   @db.VarChar(45)
+  codigo      String?   @db.VarChar(45)
+  estado      String?   @db.VarChar(45)
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  carreras Carrera[]
+  clases   Clase[]
+}
+
+model Role {
+  idRole      String    @id(map: "PK_Role") @db.VarChar(45)
+  nombre      String?   @db.VarChar(45)
+  descripcion String?   @db.VarChar(45)
+  estado      String?   @db.VarChar(45)
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  users User[]
+}
+
+model Posicion {
+  idPosicion String  @id(map: "PK_Posicion") @db.VarChar(45)
+  posX       String? @db.VarChar(45)
+  posY       String? @db.VarChar(45)
+  nivel      Int?
+
+  plantillaMallaClases PlantillaMalla_has_Clase[]
+}
+
+model Carrera {
+  idCarrera  String    @id(map: "PK_Carrera") @db.VarChar(45)
+  nombre     String?   @db.VarChar(45)
+  codigo     String?   @db.VarChar(45)
+  createdAt  DateTime?
+  updatedAt  DateTime?
+  idFacultad String    @db.VarChar(45)
+
+  facultad   Facultad         @relation(fields: [idFacultad], references: [idFacultad], onUpdate: NoAction, map: "fk_Carrera_Facultad1")
+  plantillas PlantillaMalla[]
+}
+
+model Clase {
+  idClase             String    @id(map: "PK_Clase") @db.VarChar(45)
+  codigo              String?   @db.VarChar(45)
+  nombre              String?   @db.VarChar(100)
+  unidadesValorativas Int?
+  createdAt           DateTime?
+  updatedAt           DateTime?
+  idFacultad          String    @db.VarChar(45)
+
+  facultad             Facultad                   @relation(fields: [idFacultad], references: [idFacultad], onUpdate: NoAction, map: "fk_Clase_Facultad1")
+  plantillaMallaClases PlantillaMalla_has_Clase[]
+}
+
+model User {
+  idUser              String    @id(map: "PK_User") @db.VarChar(45)
+  idRole              String    @db.VarChar(45)
+  correoInstitucional String?   @db.VarChar(45)
+  passwordHash        String?   @db.VarChar(100)
+  failedLoginAttempts Int?
+  lockedUntil         DateTime?
+  NombreCompleto      String?   @db.VarChar(100)
+  codigoInstitucional String?   @db.VarChar(45)
+  createdAt           DateTime?
+  updatedAt           DateTime?
+
+  role                Role                      @relation(fields: [idRole], references: [idRole], onUpdate: NoAction, map: "fk_User_Role1")
+  sesiones            Session[]
+  historialAcademico  HistorialAcademico[]
+  plantillasAsignadas PlantillaMalla_has_User[]
+  inscripciones       Inscripcion[]
+}
+
+model PlantillaMalla {
+  idPlantillaMalla  String    @id(map: "PK_PlantillaMalla") @db.VarChar(45)
+  idCarrera         String    @db.VarChar(45)
+  nombre            String?   @db.VarChar(45)
+  version           Decimal?  @db.Decimal(10, 2)
+  activa            Boolean?
+  plantillaOrigenId String    @db.VarChar(45)
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  carrera         Carrera                   @relation(fields: [idCarrera], references: [idCarrera], onUpdate: NoAction, map: "fk_PlantillaMalla_Carrera1")
+  plantillaOrigen PlantillaMalla            @relation("VersionesPlantilla", fields: [plantillaOrigenId], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_PlantillaMalla_PlantillaMalla1")
+  versiones       PlantillaMalla[]          @relation("VersionesPlantilla")
+  clases          PlantillaMalla_has_Clase[]
+  estudiantes     PlantillaMalla_has_User[]
+}
+
+model PlantillaMalla_has_Clase {
+  idPlantillaMalla_has_Clase String    @unique(map: "UQ_PlantillaMalla_has_Clase_id") @db.VarChar(45)
+  idPlantillaMalla           String    @db.VarChar(45)
+  idClase                    String    @db.VarChar(45)
+  Posicion_idPosicion        String    @db.VarChar(45)
+  obligatoria                Boolean?
+  estado                     String?   @db.VarChar(45)
+  createdAt                  DateTime?
+  updatedAt                  DateTime?
+
+  plantillaMalla PlantillaMalla @relation(fields: [idPlantillaMalla], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_PlantillaMalla_has_Clase_PlantillaMalla1")
+  clase          Clase          @relation(fields: [idClase], references: [idClase], onUpdate: NoAction, map: "fk_PlantillaMalla_has_Clase_Clase1")
+  posicion       Posicion       @relation(fields: [Posicion_idPosicion], references: [idPosicion], onUpdate: NoAction, map: "fk_PlantillaMalla_has_Clase_Posicion1")
+
+  historialAcademico HistorialAcademico[]
+  inscripciones      Inscripcion[]
+  // Requisitos donde ESTA fila es la clase que exige algo.
+  requisitosPropios  Requisito[]          @relation("ClaseConRequisito")
+  // Requisitos donde ESTA fila es exigida por otra clase.
+  esRequisitoDe      Requisito[]          @relation("ClaseEsRequisito")
+
+  @@id([idPlantillaMalla_has_Clase, idPlantillaMalla, idClase], map: "PK_PlantillaMalla_has_Clase")
+}
+
+model Requisito {
+  idRequisito                String    @id(map: "PK_Requisito") @db.VarChar(45)
+  tipoRequisito               String?   @db.VarChar(1)
+  createdAt                   DateTime?
+  updatedAt                   DateTime?
+  idPlantillaMalla_has_Clase  String    @db.VarChar(45)
+  idClaseRequisito             String    @db.VarChar(45)
+
+  clase     PlantillaMalla_has_Clase @relation("ClaseConRequisito", fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase1")
+  requisito PlantillaMalla_has_Clase @relation("ClaseEsRequisito", fields: [idClaseRequisito], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase2")
+}
+
+model HistorialAcademico {
+  idHistorialAcademico       String    @id(map: "PK_HistorialAcademico") @db.VarChar(45)
+  idUser                     String    @db.VarChar(45)
+  periodo                    String?   @db.VarChar(45)
+  anno                       String?   @db.VarChar(45)
+  nota                       String?   @db.VarChar(45)
+  origen                     String?   @db.VarChar(45)
+  estado                     String?   @db.VarChar(45)
+  createdAt                  DateTime?
+  updatedAt                  DateTime?
+  idPlantillaMalla_has_Clase String    @db.VarChar(45)
+
+  user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
+  plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_HistorialAcademico_PlantillaMalla_has_Clase1")
+}
+
+// PENDIENTE DE APROBACIÓN: tabla nueva, no existe todavía en Azure real (ver
+// migrations/proposed/2026-08-30_inscripcion.sql). El esquema real no trae
+// ninguna tabla para "clases inscritas en el período actual"; esta la
+// recrea con la misma forma que tenía el schema anterior.
+model Inscripcion {
+  idInscripcion               String    @id(map: "PK_Inscripcion") @db.VarChar(45)
+  idUser                      String    @db.VarChar(45)
+  idPlantillaMalla_has_Clase  String    @db.VarChar(45)
+  periodo                     String?   @db.VarChar(45)
+  createdAt                   DateTime?
+
+  user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Inscripcion_User1")
+  plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Inscripcion_PlantillaMalla_has_Clase1")
+
+  @@unique([idUser, idPlantillaMalla_has_Clase, periodo], map: "UQ_Inscripcion_User_Clase_Periodo")
+}
+
+model Session {
+  idSession       String    @id(map: "PK_Session") @db.VarChar(45)
+  idUser          String    @db.VarChar(45)
+  refresTokenHash String?   @db.VarChar(45)
+  userAgent       String?   @db.VarChar(45)
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime?
+
+  user User @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Session_User1")
+}
+
+model PlantillaMalla_has_User {
+  idPlantillaMalla String  @db.VarChar(45)
+  idUser           String  @db.VarChar(45)
+  estado           String? @db.VarChar(45)
+  createAt         String? @db.VarChar(45)
+
+  plantillaMalla PlantillaMalla @relation(fields: [idPlantillaMalla], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_PlantillaMalla_has_User_PlantillaMalla1")
+  user           User           @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_PlantillaMalla_has_User_User1")
+
+  @@id([idPlantillaMalla, idUser], map: "PK_PlantillaMalla_has_User")
+}
