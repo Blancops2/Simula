@@ -86,7 +86,7 @@ export class CurriculumService {
       throw new NotFoundException('La facultad indicada no existe.');
     }
 
-    return this.prisma.carrera.create({
+    const carrera = await this.prisma.carrera.create({
       data: {
         idCarrera: randomUUID(),
         nombre: dto.nombre,
@@ -94,10 +94,12 @@ export class CurriculumService {
         idFacultad: dto.idFacultad,
       },
     });
+    return { id: carrera.idCarrera, nombre: carrera.nombre ?? '', codigo: carrera.codigo ?? '' };
   }
 
   async listarCarreras() {
-    return this.prisma.carrera.findMany({ orderBy: { nombre: 'asc' } });
+    const carreras = await this.prisma.carrera.findMany({ orderBy: { nombre: 'asc' } });
+    return carreras.map((c) => ({ id: c.idCarrera, nombre: c.nombre ?? '', codigo: c.codigo ?? '' }));
   }
 
   // ---------- Plantillas ----------
@@ -132,7 +134,7 @@ export class CurriculumService {
   }
 
   async listarPlantillas(carreraId?: string) {
-    return this.prisma.plantillaMalla.findMany({
+    const plantillas = await this.prisma.plantillaMalla.findMany({
       where: carreraId ? { idCarrera: carreraId } : undefined,
       include: {
         carrera: { select: { idCarrera: true, nombre: true, codigo: true } },
@@ -140,6 +142,17 @@ export class CurriculumService {
       },
       orderBy: [{ idCarrera: 'asc' }, { nombre: 'asc' }, { version: 'desc' }],
     });
+
+    return plantillas.map((p) => ({
+      id: p.idPlantillaMalla,
+      nombre: p.nombre ?? '',
+      version: Number(p.version ?? 1),
+      activa: p.activa ?? true,
+      carreraId: p.idCarrera,
+      plantillaOrigenId: p.plantillaOrigenId,
+      carrera: { id: p.carrera.idCarrera, nombre: p.carrera.nombre ?? '', codigo: p.carrera.codigo ?? '' },
+      _count: p._count,
+    }));
   }
 
   async obtenerArbol(id: string, currentUser: RequestUser): Promise<PlantillaArbol> {

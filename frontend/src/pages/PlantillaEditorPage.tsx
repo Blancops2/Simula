@@ -1,15 +1,19 @@
 import {
   Background,
+  ControlButton,
   Controls,
   MarkerType,
   MiniMap,
   ReactFlow,
+  SelectionMode,
   useEdgesState,
   useNodesState,
+  useReactFlow,
+  useStoreApi,
   type Connection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { addClase, addRequisito, deleteClase, deleteRequisito, getPlantillaArbol, updateClase } from '../api/curriculumApi';
 import { AppShell } from '../components/AppShell';
@@ -42,12 +46,63 @@ interface PendingConnection {
   target: string;
 }
 
+interface AristaPendiente {
+  localId: string;
+  source: string;
+  target: string;
+  tipo: TipoRequisito;
+}
+
+// React Flow solo acumula la selección de nodos al hacer clic cuando su
+// tecla de "multi-selección" está presionada. Como queremos que el modo
+// selección acumule con un simple clic (sin mantener ninguna tecla), este
+// componente (hijo del canvas, puede usar el store interno) fuerza esa
+// bandera mientras el modo esté activo.
+function SincronizarSeleccionMultiple({ activo }: { activo: boolean }) {
+  const store = useStoreApi();
+  useEffect(() => {
+    store.setState({ multiSelectionActive: activo });
+  }, [activo, store]);
+  return null;
+}
+
+// fitView solo centra la vista una vez, al montar. Sin esto, una clase
+// movida muy lejos queda guardada correctamente pero fuera del área visible
+// del canvas tras recargar, dando la impresión de que no se guardó nada.
+function AjustarVistaAlGuardar({ tick }: { tick: number }) {
+  const { fitView } = useReactFlow();
+  const esPrimerRender = useRef(true);
+  useEffect(() => {
+    if (esPrimerRender.current) {
+      esPrimerRender.current = false;
+      return;
+    }
+    fitView({ duration: 300, padding: 0.2 });
+  }, [tick, fitView]);
+  return null;
+}
+
+function IconoPuntero() {
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16.006 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" />
+    </svg>
+  );
+}
+
 export function PlantillaEditorPage() {
   const { id } = useParams<{ id: string }>();
   const [arbol, setArbol] = useState<PlantillaArbol | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [autoOrdenando, setAutoOrdenando] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+
+  // Los cambios en el canvas (posiciones y conexiones/desconexiones) no se
+  // persisten al instante: se acumulan aquí y solo se envían al backend
+  // cuando el usuario presiona "Guardar cambios".
+  const [posicionesPendientes, setPosicionesPendientes] = useState<Record<string, { x: number; y: number }>>({});
+  const [aristasPendientesNuevas, setAristasPendientesNuevas] = useState<AristaPendiente[]>([]);
+  const [relacionesPendientesEliminar, setRelacionesPendientesEliminar] = useState<Set<string>>(new Set());
 
   const [nodes, setNodes, onNodesChange] = useNodesState<ClaseNodeType>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RequisitoEdgeType>([]);
@@ -59,8 +114,8 @@ export function PlantillaEditorPage() {
 
   const [editingClaseId, setEditingClaseId] = useState<string | null>(null);
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null);
-  const [conexionError, setConexionError] = useState<string | null>(null);
-  const [conexionProcesando, setConexionProcesando] = useState(false);
+  const [modoSeleccion, setModoSeleccion] = useState(false);
+  const [saveTick, setSaveTick] = useState(0);
 
   const cargar = useCallback(async () => {
     if (!id) return;
@@ -84,9 +139,10 @@ export function PlantillaEditorPage() {
     [arbol],
   );
 
-  // Reconstruye los nodos del canvas cada vez que se recarga la plantilla.
-  // El arrastre de nodos actualiza la posición localmente (useNodesState) y
-  // se persiste en onNodeDragStop, sin forzar una recarga completa.
+  // Reconstruye los nodos del canvas cada vez que se recarga la plantilla,
+  // superponiendo las posiciones aún no guardadas (posicionesPendientes) para
+  // que no se pierdan si el árbol se recarga por otra acción (p. ej. editar
+  // una clase) antes de presionar "Guardar cambios".
   useEffect(() => {
     if (!arbol) return;
     const indicePorNivel = new Map<number, number>();
@@ -96,20 +152,27 @@ export function PlantillaEditorPage() {
       return {
         id: clase.id,
         type: 'clase',
-        position: posicionDeClase(clase, idx),
+        position: posicionesPendientes[clase.id] ?? posicionDeClase(clase, idx),
         data: { clase },
       };
     });
     setNodes(nuevosNodos);
-  }, [arbol, todasLasClases, setNodes]);
+  }, [arbol, todasLasClases, posicionesPendientes, setNodes]);
 
   // Las aristas se reconstruyen también cuando cambia el nodo resaltado
-  // (hover), para colorear solo sus conexiones directas.
+  // (hover), para colorear solo sus conexiones directas, y cuando cambian
+  // las conexiones/desconexiones aún no guardadas.
   useEffect(() => {
     if (!arbol) return;
     const nuevasAristas: RequisitoEdgeType[] = [];
 
-    function construirArista(relacionId: string, source: string, target: string, tipo: TipoRequisito) {
+    function construirArista(
+      relacionId: string,
+      source: string,
+      target: string,
+      tipo: TipoRequisito,
+      pendiente: boolean,
+    ) {
       const highlight: RequisitoHighlight = !highlightedNodeId
         ? 'normal'
         : source === highlightedNodeId || target === highlightedNodeId
@@ -124,39 +187,49 @@ export function PlantillaEditorPage() {
         data: {
           tipo,
           highlight,
-          onDelete: () => handleEliminarRequisito(relacionId),
+          pendiente,
+          onDelete: () => handleEliminarRequisito(relacionId, pendiente),
         },
       });
     }
 
     for (const clase of todasLasClases) {
       for (const r of clase.prerrequisitos) {
-        construirArista(r.relacionId, r.claseId, clase.id, 'PRERREQUISITO');
+        if (relacionesPendientesEliminar.has(r.relacionId)) continue;
+        construirArista(r.relacionId, r.claseId, clase.id, 'PRERREQUISITO', false);
       }
       for (const r of clase.correquisitos) {
-        construirArista(r.relacionId, r.claseId, clase.id, 'CORREQUISITO');
+        if (relacionesPendientesEliminar.has(r.relacionId)) continue;
+        construirArista(r.relacionId, r.claseId, clase.id, 'CORREQUISITO', false);
       }
+    }
+    for (const pendiente of aristasPendientesNuevas) {
+      construirArista(pendiente.localId, pendiente.source, pendiente.target, pendiente.tipo, true);
     }
     setEdges(nuevasAristas);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arbol, todasLasClases, highlightedNodeId, setEdges]);
+  }, [arbol, todasLasClases, highlightedNodeId, aristasPendientesNuevas, relacionesPendientesEliminar, setEdges]);
 
-  async function handleEliminarRequisito(relacionId: string) {
-    setError(null);
-    try {
-      await deleteRequisito(relacionId);
-      await cargar();
-    } catch (err) {
-      setError(errorMessage(err, 'No se pudo eliminar la relación.'));
+  function handleEliminarRequisito(relacionId: string, pendiente: boolean) {
+    if (pendiente) {
+      setAristasPendientesNuevas((prev) => prev.filter((a) => a.localId !== relacionId));
+      return;
     }
+    setRelacionesPendientesEliminar((prev) => new Set(prev).add(relacionId));
   }
 
-  async function onNodeDragStop(_: unknown, node: ClaseNodeType) {
-    try {
-      await updateClase(node.id, { posX: node.position.x, posY: node.position.y });
-    } catch {
-      setError('No se pudo guardar la nueva posición del nodo.');
-    }
+  function onNodeDragStop(_: unknown, node: ClaseNodeType, nodesArrastrados: ClaseNodeType[]) {
+    // Con varios nodos seleccionados, React Flow los mueve todos juntos pero
+    // `node` es solo el que se agarró con el mouse; `nodesArrastrados` trae
+    // la posición final de TODOS los que se movieron.
+    const movidos = nodesArrastrados.length > 0 ? nodesArrastrados : [node];
+    setPosicionesPendientes((prev) => {
+      const next = { ...prev };
+      for (const n of movidos) {
+        next[n.id] = { x: n.position.x, y: n.position.y };
+      }
+      return next;
+    });
   }
 
   function onConnect(connection: Connection) {
@@ -165,23 +238,21 @@ export function PlantillaEditorPage() {
       setError('Una clase no puede ser prerrequisito o correquisito de sí misma.');
       return;
     }
-    setConexionError(null);
     setPendingConnection({ source: connection.source, target: connection.target });
   }
 
-  async function confirmarConexion(tipo: TipoRequisito) {
+  function confirmarConexion(tipo: TipoRequisito) {
     if (!pendingConnection) return;
-    setConexionProcesando(true);
-    setConexionError(null);
-    try {
-      await addRequisito(pendingConnection.target, pendingConnection.source, tipo);
-      setPendingConnection(null);
-      await cargar();
-    } catch (err) {
-      setConexionError(errorMessage(err, 'No se pudo crear la relación.'));
-    } finally {
-      setConexionProcesando(false);
-    }
+    setAristasPendientesNuevas((prev) => [
+      ...prev,
+      {
+        localId: `pendiente-${crypto.randomUUID()}`,
+        source: pendingConnection.source,
+        target: pendingConnection.target,
+        tipo,
+      },
+    ]);
+    setPendingConnection(null);
   }
 
   async function onAgregarClase(e: FormEvent) {
@@ -266,20 +337,46 @@ export function PlantillaEditorPage() {
     await cargar();
   }
 
-  async function onAutoOrdenar() {
+  function onAutoOrdenar() {
     if (!arbol) return;
-    setAutoOrdenando(true);
+    const posiciones = calcularAutoLayout(arbol);
+    setPosicionesPendientes((prev) => {
+      const next = { ...prev };
+      for (const [claseId, pos] of posiciones) {
+        next[claseId] = pos;
+      }
+      return next;
+    });
+  }
+
+  const hayCambiosPendientes =
+    Object.keys(posicionesPendientes).length > 0 ||
+    aristasPendientesNuevas.length > 0 ||
+    relacionesPendientesEliminar.size > 0;
+
+  async function onGuardarCambios() {
+    setGuardando(true);
     setError(null);
     try {
-      const posiciones = calcularAutoLayout(arbol);
       await Promise.all(
-        [...posiciones.entries()].map(([claseId, pos]) => updateClase(claseId, { posX: pos.x, posY: pos.y })),
+        Object.entries(posicionesPendientes).map(([claseId, pos]) =>
+          updateClase(claseId, { posX: pos.x, posY: pos.y }),
+        ),
       );
+      for (const arista of aristasPendientesNuevas) {
+        await addRequisito(arista.target, arista.source, arista.tipo);
+      }
+      await Promise.all([...relacionesPendientesEliminar].map((relacionId) => deleteRequisito(relacionId)));
+
+      setPosicionesPendientes({});
+      setAristasPendientesNuevas([]);
+      setRelacionesPendientesEliminar(new Set());
       await cargar();
-    } catch {
-      setError('No se pudo reordenar automáticamente.');
+      setSaveTick((t) => t + 1);
+    } catch (err) {
+      setError(errorMessage(err, 'No se pudieron guardar los cambios.'));
     } finally {
-      setAutoOrdenando(false);
+      setGuardando(false);
     }
   }
 
@@ -287,7 +384,7 @@ export function PlantillaEditorPage() {
     ? `${arbol.nombre} · v${arbol.version}${arbol.activa ? '' : ' (inactiva)'}`
     : 'Editor de plantilla';
 
-  if (loading) {
+  if (loading && !arbol) {
     return (
       <AppShell title={titulo} backTo="/admin/plantillas" backLabel="Plantillas">
         <p>Cargando…</p>
@@ -332,14 +429,27 @@ export function PlantillaEditorPage() {
       <section className="panel">
         <div className="panel-header">
           <h2>Malla curricular</h2>
-          <button className={`btn btn-secondary btn-sm ${autoOrdenando ? 'btn-loading' : ''}`} disabled={autoOrdenando} onClick={onAutoOrdenar}>
-            Auto-ordenar por nivel
-          </button>
+          <div className="panel-header-actions">
+            {hayCambiosPendientes && <span className="unsaved-hint">Cambios sin guardar</span>}
+            <button className="btn btn-secondary btn-sm" onClick={onAutoOrdenar}>
+              Auto-ordenar por nivel
+            </button>
+            <button
+              className={`btn btn-primary btn-sm ${guardando ? 'btn-loading' : ''}`}
+              disabled={!hayCambiosPendientes || guardando}
+              onClick={onGuardarCambios}
+            >
+              Guardar cambios
+            </button>
+          </div>
         </div>
         <p className="flow-legend">
           Arrastra los nodos para reacomodarlos, o conecta desde el borde derecho de una clase hasta el borde
           izquierdo de otra para crear una relación. Línea sólida = prerrequisito · línea punteada = correquisito.
-          Pasa el cursor sobre un nodo para resaltar sus conexiones; haz clic para editarlo.
+          Pasa el cursor sobre un nodo para resaltar sus conexiones; haz clic para editarlo. Los cambios de
+          posición y de conexiones no se guardan hasta presionar "Guardar cambios". Usa el botón de puntero de
+          los controles para activar el modo selección (clic para elegir clases una a una, o arrastra un cuadro
+          para seleccionar varias; el paneo del canvas queda disponible con el botón central o derecho del mouse).
         </p>
 
         {todasLasClases.length === 0 ? (
@@ -354,16 +464,32 @@ export function PlantillaEditorPage() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onNodeDragStop={onNodeDragStop}
-              onNodeClick={(_, node) => setEditingClaseId(node.id)}
+              onNodeClick={(_, node) => {
+                if (modoSeleccion) return;
+                setEditingClaseId(node.id);
+              }}
               onNodeMouseEnter={(_, node) => setHighlightedNodeId(node.id)}
               onNodeMouseLeave={() => setHighlightedNodeId(null)}
               onConnect={onConnect}
               colorMode="system"
               fitView
               proOptions={{ hideAttribution: true }}
+              selectionOnDrag={modoSeleccion}
+              selectionMode={SelectionMode.Partial}
+              panOnDrag={modoSeleccion ? [1, 2] : true}
             >
+              <SincronizarSeleccionMultiple activo={modoSeleccion} />
+              <AjustarVistaAlGuardar tick={saveTick} />
               <Background gap={20} />
-              <Controls showInteractive={false} />
+              <Controls showInteractive={false}>
+                <ControlButton
+                  className={modoSeleccion ? 'flow-controls-button-activo' : ''}
+                  onClick={() => setModoSeleccion((activo) => !activo)}
+                  title={modoSeleccion ? 'Desactivar modo selección' : 'Activar modo selección'}
+                >
+                  <IconoPuntero />
+                </ControlButton>
+              </Controls>
               <MiniMap pannable zoomable />
             </ReactFlow>
           </div>
@@ -386,8 +512,8 @@ export function PlantillaEditorPage() {
           claseCodigo={claseCodigo}
           onElegir={confirmarConexion}
           onCancelar={() => setPendingConnection(null)}
-          procesando={conexionProcesando}
-          error={conexionError}
+          procesando={false}
+          error={null}
         />
       )}
     </AppShell>

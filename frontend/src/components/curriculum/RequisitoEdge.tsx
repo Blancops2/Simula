@@ -4,7 +4,7 @@ import type { TipoRequisito } from '../../curriculum/types';
 export type RequisitoHighlight = 'normal' | 'accent' | 'dim';
 
 export type RequisitoEdgeType = Edge<
-  { tipo: TipoRequisito; highlight: RequisitoHighlight; onDelete: () => void },
+  { tipo: TipoRequisito; highlight: RequisitoHighlight; pendiente?: boolean; onDelete: () => void },
   'requisito'
 >;
 
@@ -43,6 +43,7 @@ export function RequisitoEdge({
           esCorrequisito ? 'flow-edge-correquisito' : 'flow-edge-prerrequisito',
           `flow-edge-${highlight}`,
           selected ? 'flow-edge-selected' : '',
+          data?.pendiente ? 'flow-edge-pendiente' : '',
         ]
           .filter(Boolean)
           .join(' ')}

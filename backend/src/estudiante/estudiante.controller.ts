@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '../common/enums';
 import { CurrentUser, RequestUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { InscribirClasesDto } from './dto/inscribir-clases.dto';
 import { EstudianteService } from './estudiante.service';
 
@@ -20,6 +21,14 @@ export class EstudianteController {
   @ApiOperation({ summary: 'Perfil del estudiante autenticado: datos básicos y avance académico.' })
   perfil(@CurrentUser() user: RequestUser) {
     return this.estudiante.obtenerPerfil(user.userId, user);
+  }
+
+  @Patch('perfil')
+  @ApiOperation({
+    summary: 'Actualiza los datos de identidad editables del estudiante autenticado (nombre completo, código estudiantil).',
+  })
+  actualizarPerfil(@CurrentUser() user: RequestUser, @Body() dto: ActualizarPerfilEstudianteDto) {
+    return this.estudiante.actualizarPerfil(user.userId, dto);
   }
 
   @Get('malla')

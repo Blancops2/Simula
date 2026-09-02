@@ -2,6 +2,5 @@ node_modules/
 dist/
 .env
 *.log
-DDL.sql
-DML.sql
 prompt_agente_simula.md
+node_modules/

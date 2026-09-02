@@ -5,3 +5,8 @@ export interface AuthUser {
   email: string;
   role: Role;
 }
+
+export const ROLE_HOME: Record<Role, string> = {
+  ESTUDIANTE: '/estudiante',
+  ADMINISTRADOR: '/admin',
+};

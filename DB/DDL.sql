@@ -167,7 +167,7 @@ GO
 CREATE TABLE [Session] (
     idSession          VARCHAR(45) NOT NULL,
     idUser             VARCHAR(45) NOT NULL,
-    refresTokenHash    VARCHAR(45) NULL,
+    refresTokenHash    VARCHAR(64) NULL,
     userAgent          VARCHAR(45) NULL,
     expiresAt          DATETIME2   NULL,
     revokedAt          DATETIME2   NULL,

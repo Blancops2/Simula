@@ -1,4 +1,9 @@
-import { HttpException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '@prisma/client';
@@ -25,6 +30,8 @@ export interface SessionTokens {
 }
 
 const GENERIC_AUTH_ERROR = 'Correo o contraseña incorrectos.';
+const NO_ROLE_ERROR =
+  'Tu cuenta no tiene un rol asignado. Contacta al administrador del sistema.';
 
 @Injectable()
 export class AuthService {
@@ -199,7 +206,10 @@ export class AuthService {
 
     const role = ROLE_ID_MAP[user.idRole];
     if (!role) {
-      throw new UnauthorizedException(GENERIC_AUTH_ERROR);
+      // Credenciales correctas pero sin rol utilizable: es un problema de
+      // autorización (falta configurar el rol), no de autenticación, así que
+      // se distingue del error genérico de credenciales inválidas.
+      throw new ForbiddenException(NO_ROLE_ERROR);
     }
 
     const accessPayload: AccessTokenPayload = {

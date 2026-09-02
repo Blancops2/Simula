@@ -12,6 +12,15 @@ export async function getPerfil(): Promise<PerfilEstudiante> {
   return data;
 }
 
+export interface ActualizarPerfilInput {
+  nombreCompleto?: string;
+  codigoEstudiantil?: string;
+}
+
+export async function actualizarPerfil(input: ActualizarPerfilInput): Promise<void> {
+  await httpClient.patch('/estudiante/perfil', input);
+}
+
 export async function getMalla(): Promise<MallaConEstado> {
   const { data } = await httpClient.get<MallaConEstado>('/estudiante/malla');
   return data;

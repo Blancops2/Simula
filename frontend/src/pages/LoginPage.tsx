@@ -1,12 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate, type Location } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import type { Role } from '../auth/types';
-
-const ROLE_HOME: Record<Role, string> = {
-  ESTUDIANTE: '/estudiante',
-  ADMINISTRADOR: '/admin',
-};
+import { ROLE_HOME } from '../auth/types';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -34,6 +29,8 @@ export function LoginPage() {
 
       if (status === 423) {
         setError(message ?? 'Cuenta bloqueada temporalmente. Intenta más tarde.');
+      } else if (status === 403) {
+        setError(message ?? 'Tu cuenta no tiene un rol asignado. Contacta al administrador.');
       } else {
         setError('Correo o contraseña incorrectos.');
       }

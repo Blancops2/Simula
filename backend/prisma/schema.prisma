@@ -179,7 +179,7 @@ model Inscripcion {
 model Session {
   idSession       String    @id(map: "PK_Session") @db.VarChar(45)
   idUser          String    @db.VarChar(45)
-  refresTokenHash String?   @db.VarChar(45)
+  refresTokenHash String?   @db.VarChar(64)
   userAgent       String?   @db.VarChar(45)
   expiresAt       DateTime?
   revokedAt       DateTime?

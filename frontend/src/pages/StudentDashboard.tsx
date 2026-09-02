@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { getPerfil } from '../api/estudianteApi';
+import { actualizarPerfil, getPerfil } from '../api/estudianteApi';
 import { useAuth } from '../auth/AuthContext';
 import { useInactivityLogout } from '../auth/useInactivityLogout';
 import { AppShell } from '../components/AppShell';
@@ -15,12 +15,50 @@ export function StudentDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [editando, setEditando] = useState(false);
+  const [nombreCompleto, setNombreCompleto] = useState('');
+  const [codigoEstudiantil, setCodigoEstudiantil] = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
+
   useEffect(() => {
     getPerfil()
       .then(setPerfil)
       .catch(() => setError('No se pudo cargar tu perfil.'))
       .finally(() => setLoading(false));
   }, []);
+
+  function iniciarEdicion() {
+    setNombreCompleto(perfil?.nombreCompleto ?? '');
+    setCodigoEstudiantil(perfil?.codigoEstudiantil ?? '');
+    setErrorGuardado(null);
+    setEditando(true);
+  }
+
+  async function handleGuardar(event: FormEvent) {
+    event.preventDefault();
+    setGuardando(true);
+    setErrorGuardado(null);
+    try {
+      await actualizarPerfil({ nombreCompleto, codigoEstudiantil });
+      const actualizado = await getPerfil();
+      setPerfil(actualizado);
+      setEditando(false);
+    } catch (err: unknown) {
+      const axiosError = err as { response?: { status?: number; data?: { message?: string | string[] } } };
+      const status = axiosError.response?.status;
+      const message = axiosError.response?.data?.message;
+      if (status === 409) {
+        setErrorGuardado(typeof message === 'string' ? message : 'Ese código estudiantil ya está en uso.');
+      } else if (status === 400) {
+        setErrorGuardado(Array.isArray(message) ? message.join(' ') : message ?? 'Revisa los datos ingresados.');
+      } else {
+        setErrorGuardado('No se pudo guardar tu perfil.');
+      }
+    } finally {
+      setGuardando(false);
+    }
+  }
 
   return (
     <AppShell title="Mi perfil">
@@ -29,16 +67,77 @@ export function StudentDashboard() {
 
       {perfil && (
         <>
+          {(!perfil.nombreCompleto || !perfil.codigoEstudiantil) && (
+            <p className="page-warning">
+              Tu información básica está incompleta ({!perfil.nombreCompleto && 'nombre completo'}
+              {!perfil.nombreCompleto && !perfil.codigoEstudiantil && ', '}
+              {!perfil.codigoEstudiantil && 'código estudiantil'}). Contacta al administrador para completarla.
+            </p>
+          )}
+
           <section className="panel">
-            <h2>{perfil.nombreCompleto ?? user?.email}</h2>
-            <div className="field-row">
-              <span className="field-label">Correo</span>
-              <span>{perfil.email}</span>
+            <div className="panel-header">
+              <h2>{perfil.nombreCompleto ?? user?.email}</h2>
+              {!editando && (
+                <button className="btn btn-secondary btn-sm" onClick={iniciarEdicion}>
+                  Editar
+                </button>
+              )}
             </div>
-            <div className="field-row">
-              <span className="field-label">Código estudiantil</span>
-              <span>{perfil.codigoEstudiantil ?? <em>sin asignar</em>}</span>
-            </div>
+
+            {editando ? (
+              <form onSubmit={handleGuardar}>
+                {errorGuardado && <p className="page-error">{errorGuardado}</p>}
+                <label className="field">
+                  Nombre completo
+                  <input
+                    value={nombreCompleto}
+                    onChange={(e) => setNombreCompleto(e.target.value)}
+                    required
+                  />
+                </label>
+                <label className="field" style={{ marginTop: 10 }}>
+                  Código estudiantil
+                  <input
+                    value={codigoEstudiantil}
+                    onChange={(e) => setCodigoEstudiantil(e.target.value)}
+                    required
+                  />
+                </label>
+                <div className="inline-form" style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={guardando}
+                    onClick={() => setEditando(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className={`btn btn-primary ${guardando ? 'btn-loading' : ''}`}
+                    disabled={guardando}
+                  >
+                    Guardar cambios
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="field-row">
+                  <span className="field-label">Correo</span>
+                  <span>{perfil.email}</span>
+                </div>
+                <div className="field-row">
+                  <span className="field-label">Código estudiantil</span>
+                  <span>{perfil.codigoEstudiantil ?? <em>sin asignar</em>}</span>
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Información académica</h2>
             <div className="field-row">
               <span className="field-label">Carrera</span>
               <span>{perfil.carrera ? `${perfil.carrera.nombre} (${perfil.carrera.codigo})` : <em>sin asignar</em>}</span>
