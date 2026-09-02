@@ -29,7 +29,7 @@ export function PensumClaseNode({ data }: NodeProps<PensumClaseNodeType>) {
         {clase.unidadesValorativas} U.V. · Nivel {clase.nivel}
       </div>
 
-      <label className="tree-node-checkbox nodrag nopan">
+      <label className="tree-node-checkbox nodrag nopan" onClick={(e) => e.stopPropagation()}>
         <input
           type="checkbox"
           className="nodrag"

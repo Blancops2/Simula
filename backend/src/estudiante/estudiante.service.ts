@@ -14,8 +14,9 @@ import { RequestUser } from '../auth/decorators/current-user.decorator';
 import { CurriculumService, ClaseView, PlantillaArbol, RequisitoView } from '../curriculum/curriculum.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
+import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
-import { periodoActual } from './periodo.util';
+import { periodoActual, periodoCombinado } from './periodo.util';
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -40,6 +41,9 @@ export interface ClasePensum extends ClaseView {
   cursada: boolean;
   oficial: boolean;
   autorreportada: boolean;
+  periodo: string | null;
+  anno: string | null;
+  nota: string | null;
 }
 
 export interface PensumArbol {
@@ -247,26 +251,37 @@ export class EstudianteService {
       include: { plantillaMallaClase: { include: { clase: true } } },
     });
 
-    const origenPorCodigo = new Map<string, OrigenHistorial>();
+    const historialPorCodigo = new Map<
+      string,
+      { origen: OrigenHistorial; periodo: string | null; anno: string | null; nota: string | null }
+    >();
     for (const h of historialAprobado) {
       const codigo = h.plantillaMallaClase.clase.codigo;
       if (!codigo) continue;
       // Si ya hay un registro ADMIN para ese código, prevalece sobre uno
       // AUTOREPORTE: una aprobación oficial nunca queda "editable".
-      if (origenPorCodigo.get(codigo) !== OrigenHistorial.ADMIN) {
-        origenPorCodigo.set(codigo, (h.origen as OrigenHistorial) ?? OrigenHistorial.ADMIN);
+      if (historialPorCodigo.get(codigo)?.origen !== OrigenHistorial.ADMIN) {
+        historialPorCodigo.set(codigo, {
+          origen: (h.origen as OrigenHistorial) ?? OrigenHistorial.ADMIN,
+          periodo: h.periodo,
+          anno: h.anno,
+          nota: h.nota,
+        });
       }
     }
 
     const niveles = arbol.niveles.map((nivel) => ({
       nivel: nivel.nivel,
       clases: nivel.clases.map((clase): ClasePensum => {
-        const origen = origenPorCodigo.get(clase.codigo);
+        const detalle = historialPorCodigo.get(clase.codigo);
         return {
           ...clase,
-          cursada: origen !== undefined,
-          oficial: origen === OrigenHistorial.ADMIN,
-          autorreportada: origen === OrigenHistorial.AUTOREPORTE,
+          cursada: detalle !== undefined,
+          oficial: detalle?.origen === OrigenHistorial.ADMIN,
+          autorreportada: detalle?.origen === OrigenHistorial.AUTOREPORTE,
+          periodo: detalle?.periodo ?? null,
+          anno: detalle?.anno ?? null,
+          nota: detalle?.nota ?? null,
         };
       }),
     }));
@@ -283,7 +298,7 @@ export class EstudianteService {
     };
   }
 
-  async marcarClaseCursada(userId: string, claseId: string) {
+  async marcarClaseCursada(userId: string, claseId: string, detalle?: RegistrarDetalleClaseDto) {
     await this.obtenerEstudianteOFallar(userId);
     const plantillaId = await this.obtenerPlantillaAsignada(userId);
 
@@ -294,22 +309,39 @@ export class EstudianteService {
       throw new NotFoundException('La clase indicada no pertenece a tu malla curricular.');
     }
 
-    const periodo = periodoActual();
-    // No hay restricción UNIQUE (userId, claseId, periodo) en la BD real:
-    // se busca a mano en vez de un upsert por clave compuesta.
-    const existente = await this.prisma.historialAcademico.findFirst({
-      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, periodo },
+    // Un solo registro de autorreporte por clase (igual que asume
+    // desmarcarClaseCursada, que borra por origen sin filtrar periodo): así
+    // completar el modal de detalle después de tildar el checkbox actualiza
+    // la misma fila en vez de crear una duplicada.
+    const admin = await this.prisma.historialAcademico.findFirst({
+      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.ADMIN },
     });
-    if (existente && existente.origen === OrigenHistorial.ADMIN) {
-      // Ya hay un registro oficial de administrador para esta clase en el
-      // período actual: no se sobrescribe desde el autorreporte.
+    if (admin) {
+      // Ya hay un registro oficial de administrador para esta clase: no se
+      // sobrescribe desde el autorreporte.
       return;
     }
+
+    const existente = await this.prisma.historialAcademico.findFirst({
+      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.AUTOREPORTE },
+    });
+
+    // El período combinado "AAAA-P" solo se puede construir cuando el
+    // detalle trae ambos datos; el modal siempre los envía juntos.
+    const periodoDetalle =
+      detalle?.periodo !== undefined && detalle?.anno !== undefined
+        ? periodoCombinado(detalle.periodo, detalle.anno)
+        : undefined;
 
     if (existente) {
       await this.prisma.historialAcademico.update({
         where: { idHistorialAcademico: existente.idHistorialAcademico },
-        data: { estado: EstadoHistorial.APROBADA, origen: OrigenHistorial.AUTOREPORTE },
+        data: {
+          estado: EstadoHistorial.APROBADA,
+          ...(periodoDetalle !== undefined && { periodo: periodoDetalle }),
+          ...(detalle?.anno !== undefined && { anno: String(detalle.anno) }),
+          ...(detalle?.nota !== undefined && { nota: String(detalle.nota) }),
+        },
       });
     } else {
       await this.prisma.historialAcademico.create({
@@ -317,7 +349,9 @@ export class EstudianteService {
           idHistorialAcademico: randomUUID(),
           idUser: userId,
           idPlantillaMalla_has_Clase: claseId,
-          periodo,
+          periodo: periodoDetalle ?? periodoActual(),
+          anno: detalle?.anno !== undefined ? String(detalle.anno) : String(new Date().getFullYear()),
+          nota: detalle?.nota !== undefined ? String(detalle.nota) : null,
           estado: EstadoHistorial.APROBADA,
           origen: OrigenHistorial.AUTOREPORTE,
         },
@@ -346,6 +380,7 @@ export class EstudianteService {
     return historial.map((h) => ({
       id: h.idHistorialAcademico,
       periodo: h.periodo,
+      anno: h.anno,
       estado: h.estado,
       nota: h.nota,
       clase: {

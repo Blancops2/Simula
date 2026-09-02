@@ -15,11 +15,11 @@ export class RegistrarHistorialDto {
   @IsEnum(EstadoHistorial)
   estado: EstadoHistorial;
 
-  @ApiPropertyOptional({ description: 'Nota en escala 0.0 - 5.0.', example: 4.2 })
+  @ApiPropertyOptional({ description: 'Nota en escala 0 - 100.', example: 85 })
   @IsOptional()
   @IsNumber()
   @Min(0)
-  @Max(5)
+  @Max(100)
   nota?: number;
 
   @ApiProperty({ description: 'Período académico en formato AAAA-1 o AAAA-2.', example: '2026-1' })

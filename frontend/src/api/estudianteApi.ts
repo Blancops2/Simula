@@ -50,8 +50,14 @@ export async function getPensum(): Promise<PensumArbol> {
   return data;
 }
 
-export async function marcarClaseCursada(claseId: string): Promise<void> {
-  await httpClient.post(`/estudiante/pensum/clases/${claseId}`);
+export interface DetalleClaseCursada {
+  periodo?: number;
+  anno?: number;
+  nota?: number;
+}
+
+export async function marcarClaseCursada(claseId: string, detalle?: DetalleClaseCursada): Promise<void> {
+  await httpClient.post(`/estudiante/pensum/clases/${claseId}`, detalle);
 }
 
 export async function desmarcarClaseCursada(claseId: string): Promise<void> {

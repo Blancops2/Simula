@@ -1,8 +1,9 @@
 import { Background, Controls, MarkerType, MiniMap, ReactFlow, useEdgesState, useNodesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { desmarcarClaseCursada, getPensum, marcarClaseCursada } from '../api/estudianteApi';
+import { desmarcarClaseCursada, getPensum, marcarClaseCursada, type DetalleClaseCursada } from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
+import { HistorialClaseModal } from '../components/curriculum/HistorialClaseModal';
 import { PensumClaseNode, type PensumClaseNodeType } from '../components/curriculum/PensumClaseNode';
 import { RequisitoEdge, type RequisitoEdgeType } from '../components/curriculum/RequisitoEdge';
 import { posicionDeClase } from '../curriculum/layout';
@@ -20,6 +21,7 @@ export function PensumPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [procesandoId, setProcesandoId] = useState<string | null>(null);
+  const [editingClaseId, setEditingClaseId] = useState<string | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<PensumClaseNodeType>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RequisitoEdgeType>([]);
@@ -41,6 +43,20 @@ export function PensumPage() {
   }, [cargar]);
 
   const todasLasClases: ClasePensum[] = useMemo(() => arbol?.niveles.flatMap((n) => n.clases) ?? [], [arbol]);
+  const editingClase = useMemo(
+    () => todasLasClases.find((c) => c.id === editingClaseId) ?? null,
+    [todasLasClases, editingClaseId],
+  );
+
+  const handleGuardarDetalle = useCallback(
+    async (detalle: DetalleClaseCursada) => {
+      if (!editingClaseId) return;
+      await marcarClaseCursada(editingClaseId, detalle);
+      setEditingClaseId(null);
+      await cargar();
+    },
+    [editingClaseId, cargar],
+  );
 
   const onToggle = useCallback(async (claseId: string, marcar: boolean) => {
     setProcesandoId(claseId);
@@ -164,6 +180,7 @@ export function PensumPage() {
             edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onNodeClick={(_, node) => setEditingClaseId(node.id)}
             nodesDraggable={false}
             nodesConnectable={false}
             edgesFocusable={false}
@@ -176,6 +193,15 @@ export function PensumPage() {
             <MiniMap pannable zoomable />
           </ReactFlow>
         </div>
+      )}
+
+      {editingClase && (
+        <HistorialClaseModal
+          key={editingClase.id}
+          clase={editingClase}
+          onClose={() => setEditingClaseId(null)}
+          onSave={handleGuardarDetalle}
+        />
       )}
     </AppShell>
   );

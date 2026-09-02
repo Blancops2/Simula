@@ -51,6 +51,7 @@ export interface PerfilEstudiante {
 export interface HistorialItem {
   id: string;
   periodo: string;
+  anno: string | null;
   estado: EstadoHistorial;
   nota: number | null;
   clase: { codigo: string; nombre: string; unidadesValorativas: number; nivel: number };
@@ -70,6 +71,9 @@ export interface ClasePensum {
   cursada: boolean;
   oficial: boolean;
   autorreportada: boolean;
+  periodo: string | null;
+  anno: string | null;
+  nota: string | null;
 }
 
 export interface PensumArbol {

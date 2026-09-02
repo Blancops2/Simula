@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { InscribirClasesDto } from './dto/inscribir-clases.dto';
+import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
 import { EstudianteService } from './estudiante.service';
 
 @ApiTags('estudiante')
@@ -57,10 +58,16 @@ export class EstudianteController {
 
   @Post('pensum/clases/:claseId')
   @ApiOperation({
-    summary: 'Marca una clase de la malla como ya cursada (autorreporte propio, no altera el historial oficial).',
+    summary:
+      'Marca una clase de la malla como ya cursada (autorreporte propio, no altera el historial oficial). ' +
+      'Body opcional con periodo/año/nota para completar el detalle del autorreporte.',
   })
-  marcarClaseCursada(@CurrentUser() user: RequestUser, @Param('claseId') claseId: string) {
-    return this.estudiante.marcarClaseCursada(user.userId, claseId);
+  marcarClaseCursada(
+    @CurrentUser() user: RequestUser,
+    @Param('claseId') claseId: string,
+    @Body() dto: RegistrarDetalleClaseDto,
+  ) {
+    return this.estudiante.marcarClaseCursada(user.userId, claseId, dto);
   }
 
   @Delete('pensum/clases/:claseId')
