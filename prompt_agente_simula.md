@@ -36,7 +36,7 @@ Base de datos (SQL Server 2022)
 | Front-End      | React + TypeScript, bundler Vite         | Tipado fuerte end-to-end contra el contrato del Back-End. |
 | Back-End       | NestJS (Node.js + TypeScript)            | Arquitectura modular. Autenticación con JWT. Documentación autogenerada con Swagger/OpenAPI. |
 | ORM            | Prisma                                   | Capa de acceso entre Back-End y SQL Server (provider `sqlserver`). |
-| Base de datos  | SQL Server 2022                          | Motor de base de datos relacional. Los payloads de predicciones que antes usaban JSONB (Postgres) deben modelarse con tipos nativos de SQL Server (`NVARCHAR(MAX)` para JSON, funciones `JSON_VALUE`/`JSON_QUERY`, etc.). |
+| Base de datos  | SQL Server 2022                          | Motor de base de datos relacional. Los payloads de predicciones se modelan con tipos nativos de SQL Server (`NVARCHAR(MAX)` para JSON, funciones `JSON_VALUE`/`JSON_QUERY`, etc.). La migración de datos desde el esquema anterior en Postgres/JSONB ya se completó; no queda infraestructura ni dependencias de Postgres en el proyecto. |
 | Motor Predictivo | Externo (fuera de este repo)           | Comunicación exclusivamente por API REST. |
 
 ### Reglas de arquitectura no negociables
