@@ -24,6 +24,14 @@ export function AdminDashboard() {
           Gestionar plantillas de malla curricular
         </Link>
       </section>
+
+      <section className="panel">
+        <h2>Períodos académicos</h2>
+        <p>Crea, edita y habilita o deshabilita los períodos disponibles para simulación.</p>
+        <Link to="/admin/periodos" className="btn btn-primary">
+          Gestionar períodos
+        </Link>
+      </section>
     </AppShell>
   );
 }

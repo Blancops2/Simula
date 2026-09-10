@@ -88,6 +88,7 @@ model User {
   historialAcademico  HistorialAcademico[]
   plantillasAsignadas PlantillaMalla_has_User[]
   inscripciones       Inscripcion[]
+  auditorias          Auditoria[]
 }
 
 model PlantillaMalla {
@@ -143,20 +144,69 @@ model Requisito {
   requisito PlantillaMalla_has_Clase @relation("ClaseEsRequisito", fields: [idClaseRequisito], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase2")
 }
 
+// idperiodo (HU-03-03, ver migrations/proposed/2026-09-08_periodo.sql):
+// reemplaza las columnas libres "periodo" (string "AAAA-P") y "anno" por
+// esta FK al catálogo Periodo (el año ya vive en periodo.anno). Ya
+// APLICADO en el entorno local de desarrollo (db_simula_local); Azure
+// real sigue pendiente de aprobación — no aplicar allá sin autorización
+// explícita, y con el backfill que describe ese script (Azure sí puede
+// tener filas reales, a diferencia del entorno local, que estaba vacío).
 model HistorialAcademico {
   idHistorialAcademico       String    @id(map: "PK_HistorialAcademico") @db.VarChar(45)
   idUser                     String    @db.VarChar(45)
-  periodo                    String?   @db.VarChar(45)
-  anno                       String?   @db.VarChar(45)
   nota                       String?   @db.VarChar(45)
   origen                     String?   @db.VarChar(45)
   estado                     String?   @db.VarChar(45)
   createdAt                  DateTime?
   updatedAt                  DateTime?
   idPlantillaMalla_has_Clase String    @db.VarChar(45)
+  idperiodo                  String    @db.VarChar(45)
 
   user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
   plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_HistorialAcademico_PlantillaMalla_has_Clase1")
+  periodo              Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_HistorialAcademico_periodo1")
+}
+
+// Tabla nueva (HU-03-03). Ya aplicada en el entorno local de desarrollo
+// (db_simula_local); PENDIENTE DE APROBACIÓN para Azure real (ver
+// migrations/proposed/2026-09-08_periodo.sql). Catálogo de períodos
+// académicos que el administrador habilita/deshabilita; solo los
+// habilitados quedan disponibles para consulta/selección del estudiante
+// (HU1/HU2) y para simulaciones (HU-03-04).
+model Periodo {
+  idperiodo   String    @id(map: "PK_periodo") @db.VarChar(45)
+  periodo     String?   @db.VarChar(45)
+  anno        String?   @db.VarChar(45)
+  estado      String?   @db.VarChar(45)
+  FechaInicio DateTime? @db.Date
+  fechaFin    DateTime? @db.Date
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  historialAcademico HistorialAcademico[]
+
+  @@unique([anno, periodo], map: "UQ_periodo_anno_periodo")
+  @@map("periodo")
+}
+
+// Tabla nueva (HU-03-03). Ya aplicada en el entorno local de desarrollo
+// (db_simula_local); PENDIENTE DE APROBACIÓN para Azure real (ver
+// migrations/proposed/2026-09-08_periodo.sql). Auditoría
+// GENÉRICA (no exclusiva de Periodo): "entidad" + "idEntidad" identifican
+// la fila auditada en cualquier tabla, por lo que idEntidad es polimórfico
+// y no lleva FK propia. Hoy el único productor de filas es el cambio de
+// estado de un período (AC5 de HU-03-03).
+model Auditoria {
+  idAuditoria   String    @id(map: "PK_Auditoria") @db.VarChar(45)
+  entidad       String    @db.VarChar(45)
+  idEntidad     String    @db.VarChar(45)
+  campo         String?   @db.VarChar(45)
+  valorAnterior String?   @db.VarChar(255)
+  valorNuevo    String?   @db.VarChar(255)
+  idUser        String    @db.VarChar(45)
+  createdAt     DateTime?
+
+  user User @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Auditoria_User1")
 }
 
 // PENDIENTE DE APROBACIÓN: tabla nueva, no existe todavía en Azure real (ver

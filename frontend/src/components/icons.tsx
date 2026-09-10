@@ -74,6 +74,16 @@ export function IconChevronLeft(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconCalendar(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="4" y="5.5" width="16" height="14.5" rx="1.5" />
+      <path d="M4 10h16" />
+      <path d="M8 3.5v3M16 3.5v3" />
+    </Icon>
+  );
+}
+
 export function IconSitemap(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

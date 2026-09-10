@@ -16,7 +16,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
-import { periodoActual, periodoCombinado } from './periodo.util';
+import { periodoActual, semestreActual } from './periodo.util';
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -248,7 +248,7 @@ export class EstudianteService {
     // por id), para que siga contando tras un cambio de versión de plantilla.
     const historialAprobado = await this.prisma.historialAcademico.findMany({
       where: { idUser: userId, estado: EstadoHistorial.APROBADA },
-      include: { plantillaMallaClase: { include: { clase: true } } },
+      include: { plantillaMallaClase: { include: { clase: true } }, periodo: true },
     });
 
     const historialPorCodigo = new Map<
@@ -263,8 +263,8 @@ export class EstudianteService {
       if (historialPorCodigo.get(codigo)?.origen !== OrigenHistorial.ADMIN) {
         historialPorCodigo.set(codigo, {
           origen: (h.origen as OrigenHistorial) ?? OrigenHistorial.ADMIN,
-          periodo: h.periodo,
-          anno: h.anno,
+          periodo: h.periodo.periodo,
+          anno: h.periodo.anno,
           nota: h.nota,
         });
       }
@@ -326,11 +326,14 @@ export class EstudianteService {
       where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.AUTOREPORTE },
     });
 
-    // El período combinado "AAAA-P" solo se puede construir cuando el
-    // detalle trae ambos datos; el modal siempre los envía juntos.
-    const periodoDetalle =
+    // El idperiodo solo se puede resolver del catálogo cuando el detalle
+    // trae ambos datos (año + período); el modal siempre los envía juntos.
+    // Si no vienen, en un CREATE se usa el período vigente según la fecha
+    // del servidor; en un UPDATE sin detalle, el período existente no se
+    // toca (mismo comportamiento que antes con periodo/anno).
+    const idperiodoDetalle =
       detalle?.periodo !== undefined && detalle?.anno !== undefined
-        ? periodoCombinado(detalle.periodo, detalle.anno)
+        ? await this.resolverIdPeriodo(detalle.anno, detalle.periodo)
         : undefined;
 
     if (existente) {
@@ -338,8 +341,7 @@ export class EstudianteService {
         where: { idHistorialAcademico: existente.idHistorialAcademico },
         data: {
           estado: EstadoHistorial.APROBADA,
-          ...(periodoDetalle !== undefined && { periodo: periodoDetalle }),
-          ...(detalle?.anno !== undefined && { anno: String(detalle.anno) }),
+          ...(idperiodoDetalle !== undefined && { idperiodo: idperiodoDetalle }),
           ...(detalle?.nota !== undefined && { nota: String(detalle.nota) }),
         },
       });
@@ -349,8 +351,7 @@ export class EstudianteService {
           idHistorialAcademico: randomUUID(),
           idUser: userId,
           idPlantillaMalla_has_Clase: claseId,
-          periodo: periodoDetalle ?? periodoActual(),
-          anno: detalle?.anno !== undefined ? String(detalle.anno) : String(new Date().getFullYear()),
+          idperiodo: idperiodoDetalle ?? (await this.resolverIdPeriodoActual()),
           nota: detalle?.nota !== undefined ? String(detalle.nota) : null,
           estado: EstadoHistorial.APROBADA,
           origen: OrigenHistorial.AUTOREPORTE,
@@ -374,13 +375,13 @@ export class EstudianteService {
     await this.obtenerEstudianteOFallar(userId);
     const historial = await this.prisma.historialAcademico.findMany({
       where: { idUser: userId },
-      include: { plantillaMallaClase: { include: { clase: true, posicion: true } } },
-      orderBy: [{ periodo: 'desc' }, { createdAt: 'desc' }],
+      include: { plantillaMallaClase: { include: { clase: true, posicion: true } }, periodo: true },
+      orderBy: [{ periodo: { anno: 'desc' } }, { periodo: { periodo: 'desc' } }, { createdAt: 'desc' }],
     });
     return historial.map((h) => ({
       id: h.idHistorialAcademico,
-      periodo: h.periodo,
-      anno: h.anno,
+      periodo: h.periodo.periodo,
+      anno: h.periodo.anno,
       estado: h.estado,
       nota: h.nota,
       clase: {
@@ -401,9 +402,15 @@ export class EstudianteService {
       throw new NotFoundException('La clase indicada no existe.');
     }
 
+    // dto.periodo sigue viajando como "AAAA-P" (el DTO ya lo valida con
+    // regex); se resuelve a idperiodo contra el catálogo en vez de
+    // guardarse como texto libre.
+    const [annoStr, periodoStr] = dto.periodo.split('-');
+    const idperiodo = await this.resolverIdPeriodo(Number(annoStr), Number(periodoStr));
+
     const nota = dto.nota !== undefined ? String(dto.nota) : null;
     const existente = await this.prisma.historialAcademico.findFirst({
-      where: { idUser: userId, idPlantillaMalla_has_Clase: dto.claseId, periodo: dto.periodo },
+      where: { idUser: userId, idPlantillaMalla_has_Clase: dto.claseId, idperiodo },
     });
 
     if (existente) {
@@ -418,7 +425,7 @@ export class EstudianteService {
         idHistorialAcademico: randomUUID(),
         idUser: userId,
         idPlantillaMalla_has_Clase: dto.claseId,
-        periodo: dto.periodo,
+        idperiodo,
         estado: dto.estado,
         nota,
         origen: OrigenHistorial.ADMIN,
@@ -567,5 +574,28 @@ export class EstudianteService {
       where: { idUser: userId },
     });
     return asignacion?.idPlantillaMalla ?? null;
+  }
+
+  // HU-03-03: HistorialAcademico ya no guarda año/período como texto libre,
+  // sino idperiodo -> catálogo "periodo". No se filtra por estado
+  // habilitado/deshabilitado aquí a propósito: ese filtro aplica a qué
+  // período se puede SELECCIONAR para una simulación nueva (HU-03-04), no a
+  // qué período puede describir una nota ya cursada (que puede ser de un
+  // período viejo, hoy deshabilitado).
+  private async resolverIdPeriodo(anno: number, periodo: number): Promise<string> {
+    const encontrado = await this.prisma.periodo.findFirst({
+      where: { anno: String(anno), periodo: String(periodo) },
+    });
+    if (!encontrado) {
+      throw new NotFoundException(
+        `No existe un período académico registrado para el año ${anno}, período ${periodo}. Pide al administrador que lo registre primero.`,
+      );
+    }
+    return encontrado.idperiodo;
+  }
+
+  private async resolverIdPeriodoActual(): Promise<string> {
+    const { anno, periodo } = semestreActual();
+    return this.resolverIdPeriodo(anno, periodo);
   }
 }

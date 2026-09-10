@@ -20,6 +20,7 @@ export function StudentDashboard() {
   const [codigoEstudiantil, setCodigoEstudiantil] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [errorGuardado, setErrorGuardado] = useState<string | null>(null);
+  const [mensajeGuardado, setMensajeGuardado] = useState<string | null>(null);
 
   useEffect(() => {
     getPerfil()
@@ -32,6 +33,7 @@ export function StudentDashboard() {
     setNombreCompleto(perfil?.nombreCompleto ?? '');
     setCodigoEstudiantil(perfil?.codigoEstudiantil ?? '');
     setErrorGuardado(null);
+    setMensajeGuardado(null);
     setEditando(true);
   }
 
@@ -44,6 +46,7 @@ export function StudentDashboard() {
       const actualizado = await getPerfil();
       setPerfil(actualizado);
       setEditando(false);
+      setMensajeGuardado('Perfil actualizado correctamente.');
     } catch (err: unknown) {
       const axiosError = err as { response?: { status?: number; data?: { message?: string | string[] } } };
       const status = axiosError.response?.status;
@@ -124,6 +127,7 @@ export function StudentDashboard() {
               </form>
             ) : (
               <>
+                {mensajeGuardado && <p className="page-success">{mensajeGuardado}</p>}
                 <div className="field-row">
                   <span className="field-label">Correo</span>
                   <span>{perfil.email}</span>

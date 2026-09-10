@@ -3,17 +3,18 @@
  * servidor (nunca lo envía el cliente), para que un estudiante no pueda
  * inscribirse "en" un período arbitrario.
  */
-export function periodoActual(referencia: Date = new Date()): string {
-  const semestre = referencia.getMonth() < 6 ? 1 : 2;
-  return `${referencia.getFullYear()}-${semestre}`;
+export function semestreActual(referencia: Date = new Date()): { anno: number; periodo: number } {
+  const periodo = referencia.getMonth() < 6 ? 1 : 2;
+  return { anno: referencia.getFullYear(), periodo };
 }
 
 /**
- * El selector de período (1/2/3) del modal de autorreporte es solo una
- * forma visual de capturar el dato: en la base de datos siempre se guarda
- * combinado con el año en formato "AAAA-P", igual que los registros de
- * administrador.
+ * Forma en string "AAAA-P" de semestreActual(), usada donde el período se
+ * sigue guardando como texto libre (p. ej. Inscripcion, ver HU-03-04).
+ * HistorialAcademico ya NO usa esta forma: ahora referencia el catálogo
+ * "periodo" por idperiodo (ver EstudianteService.resolverIdPeriodo).
  */
-export function periodoCombinado(periodo: number, anno: number): string {
+export function periodoActual(referencia: Date = new Date()): string {
+  const { anno, periodo } = semestreActual(referencia);
   return `${anno}-${periodo}`;
 }

@@ -57,3 +57,13 @@ export const OrigenHistorial = {
   AUTOREPORTE: 'AUTOREPORTE',
 } as const;
 export type OrigenHistorial = (typeof OrigenHistorial)[keyof typeof OrigenHistorial];
+
+// periodo.estado (HU-03-00, decisión D3): vocabulario propio en minúscula
+// ('habilitado'/'deshabilitado'), distinto del 'activo'/'inactivo' que usan
+// otras tablas catálogo, para no mezclar "existe" con "disponible para
+// selección de simulación".
+export const EstadoPeriodo = {
+  HABILITADO: 'habilitado',
+  DESHABILITADO: 'deshabilitado',
+} as const;
+export type EstadoPeriodo = (typeof EstadoPeriodo)[keyof typeof EstadoPeriodo];

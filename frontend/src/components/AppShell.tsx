@@ -1,7 +1,16 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import { IconChevronLeft, IconClock, IconHome, IconLayers, IconList, IconLogOut, IconSitemap } from './icons';
+import {
+  IconCalendar,
+  IconChevronLeft,
+  IconClock,
+  IconHome,
+  IconLayers,
+  IconList,
+  IconLogOut,
+  IconSitemap,
+} from './icons';
 
 const STUDENT_NAV = [
   { to: '/estudiante', label: 'Mi perfil', icon: IconHome },
@@ -13,6 +22,7 @@ const STUDENT_NAV = [
 const ADMIN_NAV = [
   { to: '/admin', label: 'Panel', icon: IconHome },
   { to: '/admin/plantillas', label: 'Plantillas', icon: IconList },
+  { to: '/admin/periodos', label: 'Períodos', icon: IconCalendar },
 ];
 
 interface AppShellProps {

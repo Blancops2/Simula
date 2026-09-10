@@ -4,6 +4,7 @@ import { HistorialPage } from '../pages/HistorialPage';
 import { LoginPage } from '../pages/LoginPage';
 import { PlantillaEditorPage } from '../pages/PlantillaEditorPage';
 import { PensumPage } from '../pages/PensumPage';
+import { PeriodosPage } from '../pages/PeriodosPage';
 import { PlantillasPage } from '../pages/PlantillasPage';
 import { SeleccionClasesPage } from '../pages/SeleccionClasesPage';
 import { StudentDashboard } from '../pages/StudentDashboard';
@@ -25,6 +26,7 @@ export function AppRouter() {
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/admin/plantillas" element={<PlantillasPage />} />
         <Route path="/admin/plantillas/:id" element={<PlantillaEditorPage />} />
+        <Route path="/admin/periodos" element={<PeriodosPage />} />
       </Route>
 
       <Route path="/" element={<Navigate to="/login" replace />} />

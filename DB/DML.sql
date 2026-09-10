@@ -18,6 +18,7 @@
      9) Requisito                (FK -> PlantillaMalla_has_Clase x2)
     10) PlantillaMalla_has_User (FK -> PlantillaMalla, [User])
     11) [Session]                (FK -> [User])
+    12) periodo                 (sin FK; HU-03-03)
 
    NOTA TECNICA IMPORTANTE (Posicion):
      Originalmente Posicion solo tenia 1 fila "placeholder" (POS-DEFAULT,
@@ -41,6 +42,12 @@
 
    NOTA: La tabla HistorialAcademico se omite por completo (nadie la
    referencia via FK, por lo que no afecta la integridad del script).
+   Por eso el nuevo idperiodo NOT NULL de HistorialAcademico (HU-03-03)
+   tampoco requiere backfill en este script: no hay filas que llenar.
+
+   NOTA (HU-03-03): la tabla Auditoria (genérica, ver DDL.sql) tampoco se
+   siembra aquí a propósito: sus filas las produce la aplicación cada vez
+   que un admin cambia el estado de un período, no datos de ejemplo.
 
    NOTA SOBRE OPTATIVAS SIN CODIGO PROPIO:
      El plan de estudios incluye espacios de "Optativa II: Campo de las
@@ -65,7 +72,7 @@
      en la practica a una asignatura concreta.
    ===================================================================== */
 
-USE [db-simula];
+USE [db_simula_local];
 GO
 
 -- =====================================================================
@@ -217,10 +224,10 @@ GO
 --    Administradores: nombre.apellido@unah.edu.hn
 -- =====================================================================
 INSERT INTO [User] (idUser, idRole, correoInstitucional, passwordHash, failedLoginAttempts, lockedUntil, NombreCompleto, codigoInstitucional, createdAt, updatedAt) VALUES
-('USR-EST-001', 'ROL-EST', 'juan.perez@unah.hn',       '$2b$12$khkEWIBeY4zoUZQc71LZYOSihJJ5YEjfSefV.iszZ2W6eFMax94eK', 0, NULL, 'Juan Perez',       '20211000123', SYSDATETIME(), SYSDATETIME()),
-('USR-EST-002', 'ROL-EST', 'maria.lopez@unah.hn',      '$2b$12$khkEWIBeY4zoUZQc71LZYOSihJJ5YEjfSefV.iszZ2W6eFMax94eK', 0, NULL, 'Maria Lopez',      '20211000456', SYSDATETIME(), SYSDATETIME()),
-('USR-ADM-001', 'ROL-ADM', 'carlos.rodriguez@unah.edu.hn', '$2b$12$CyeJkJQ0QQGs3iu7Wk.Gpe/NQ/cE3z1w6o1cp1hz7N.BhSNf1cOdW', 0, NULL, 'Carlos Rodriguez', 'ADM-001', SYSDATETIME(), SYSDATETIME()),
-('USR-ADM-002', 'ROL-ADM', 'ana.martinez@unah.edu.hn',     '$2b$12$CyeJkJQ0QQGs3iu7Wk.Gpe/NQ/cE3z1w6o1cp1hz7N.BhSNf1cOdW', 0, NULL, 'Ana Martinez',     'ADM-002', SYSDATETIME(), SYSDATETIME());
+('USR-EST-001', 'ROL-EST', 'juan.perez@unah.hn',       '$2b$12$ZuNuQ6gTB37zxr0mznkBsOAGB9fGp4zaBkLWfRUEYMAHBzP26XyUW', 0, NULL, 'Juan Perez',       '20211000123', SYSDATETIME(), SYSDATETIME()),
+('USR-EST-002', 'ROL-EST', 'maria.lopez@unah.hn',      '$2b$12$ZuNuQ6gTB37zxr0mznkBsOAGB9fGp4zaBkLWfRUEYMAHBzP26XyUW', 0, NULL, 'Maria Lopez',      '20211000456', SYSDATETIME(), SYSDATETIME()),
+('USR-ADM-001', 'ROL-ADM', 'carlos.rodriguez@unah.edu.hn', '$2b$12$8EWFLjhk4eL76GIpFoLBEOh24Z3QIbHFrvpTePpBZwSwtabeOhutu', 0, NULL, 'Carlos Rodriguez', 'ADM-001', SYSDATETIME(), SYSDATETIME()),
+('USR-ADM-002', 'ROL-ADM', 'ana.martinez@unah.edu.hn',     '$2b$12$8EWFLjhk4eL76GIpFoLBEOh24Z3QIbHFrvpTePpBZwSwtabeOhutu', 0, NULL, 'Ana Martinez',     'ADM-002', SYSDATETIME(), SYSDATETIME());
 GO
 
 -- =====================================================================
@@ -375,8 +382,27 @@ INSERT INTO [Session] (idSession, idUser, refresTokenHash, userAgent, expiresAt,
 ('SES-002', 'USR-EST-002', '$2a$12$examplerefreshtoken02', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)', DATEADD(DAY, 7, SYSDATETIME()), NULL, SYSDATETIME());
 GO
 
+-- =====================================================================
+-- 12) PERIODO (HU-03-03)
+--     Catalogo de periodos academicos. "periodo" usa '1'/'2' (mismo
+--     dominio numerico que ya usaban RegistrarDetalleClaseDto y
+--     periodo.util.ts para el selector de periodo, NO numeros romanos).
+--     "estado" usa 'habilitado' / 'deshabilitado' (vocabulario de la
+--     propia HU), a diferencia del 'activo'/'inactivo' usado en otras
+--     tablas de este script. Se incluye un periodo futuro deshabilitado
+--     a proposito, para poder probar de inmediato que un periodo
+--     deshabilitado no debe quedar disponible para el estudiante (AC3).
+-- =====================================================================
+INSERT INTO periodo (idperiodo, periodo, anno, estado, FechaInicio, fechaFin, createdAt, updatedAt) VALUES
+('PER-2025-1', '1', '2025', 'habilitado',    '2025-01-13', '2025-06-06', SYSDATETIME(), SYSDATETIME()),
+('PER-2025-2', '2', '2025', 'habilitado',    '2025-07-14', '2025-12-05', SYSDATETIME(), SYSDATETIME()),
+('PER-2026-1', '1', '2026', 'habilitado',    '2026-01-12', '2026-06-05', SYSDATETIME(), SYSDATETIME()),
+('PER-2026-2', '2', '2026', 'deshabilitado', '2026-07-13', '2026-12-04', SYSDATETIME(), SYSDATETIME());
+GO
+
 /* =====================================================================
    FIN DEL SCRIPT DML
    No se llenaron (segun instruccion): Posicion (solo 1 fila placeholder
-   obligatoria por FK) y HistorialAcademico (omitida por completo).
+   obligatoria por FK), HistorialAcademico (omitida por completo) ni
+   Auditoria (HU-03-03: la llena la aplicacion, no datos de ejemplo).
    ===================================================================== */
