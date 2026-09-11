@@ -29,10 +29,11 @@ interface AppShellProps {
   title: string;
   backTo?: string;
   backLabel?: string;
+  contextBar?: ReactNode;
   children: ReactNode;
 }
 
-export function AppShell({ title, backTo, backLabel, children }: AppShellProps) {
+export function AppShell({ title, backTo, backLabel, contextBar, children }: AppShellProps) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navItems = user?.role === 'ADMINISTRADOR' ? ADMIN_NAV : STUDENT_NAV;
@@ -78,6 +79,7 @@ export function AppShell({ title, backTo, backLabel, children }: AppShellProps) 
           <div className="app-topbar-row">
             <h1 className="app-page-title">{title}</h1>
           </div>
+          {contextBar}
         </header>
 
         <main className="app-main">{children}</main>

@@ -1,4 +1,5 @@
 import type { TipoClase } from '../curriculum/types';
+import type { EstadoPeriodo } from '../periodo/types';
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 export type EstadoHistorial = 'APROBADA' | 'REPROBADA' | 'EN_CURSO';
@@ -85,6 +86,7 @@ export interface PeriodoDisponible {
   id: string;
   anno: string;
   periodo: string;
+  estado: EstadoPeriodo;
 }
 
 export interface CatalogoDisponible {

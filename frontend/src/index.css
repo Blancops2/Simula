@@ -450,6 +450,15 @@ select:focus {
   width: 100%;
 }
 
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
 .app-loading-screen {
   min-height: 100vh;
   display: flex;
