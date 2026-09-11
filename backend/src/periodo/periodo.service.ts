@@ -56,6 +56,17 @@ export class PeriodoService {
     return periodos.map((p) => this.toView(p));
   }
 
+  // Períodos que un estudiante puede consultar/seleccionar (HU1/HU2, ver
+  // comentario del modelo Periodo en schema.prisma): solo los que el admin
+  // dejó habilitados.
+  async listarHabilitados(): Promise<PeriodoView[]> {
+    const periodos = await this.prisma.periodo.findMany({
+      where: { estado: EstadoPeriodo.HABILITADO },
+      orderBy: [{ anno: 'desc' }, { periodo: 'desc' }],
+    });
+    return periodos.map((p) => this.toView(p));
+  }
+
   async cambiarEstado(
     id: string,
     dto: CambiarEstadoPeriodoDto,

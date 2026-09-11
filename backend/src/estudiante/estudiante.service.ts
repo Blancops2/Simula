@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import {
   EstadoHistorial,
+  EstadoPeriodo,
   OrigenHistorial,
   ROLE_ID_MAP,
   Role,
@@ -12,6 +13,7 @@ import {
 } from '../common/enums';
 import { RequestUser } from '../auth/decorators/current-user.decorator';
 import { CurriculumService, ClaseView, PlantillaArbol, RequisitoView } from '../curriculum/curriculum.service';
+import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
@@ -51,11 +53,18 @@ export interface PensumArbol {
   niveles: { nivel: number; clases: ClasePensum[] }[];
 }
 
+export interface CatalogoDisponible {
+  periodo: Pick<PeriodoView, 'id' | 'anno' | 'periodo'>;
+  plantilla: Pick<PlantillaArbol, 'id' | 'nombre' | 'version' | 'activa' | 'carreraId'>;
+  niveles: { nivel: number; clases: ClaseConEstado[] }[];
+}
+
 @Injectable()
 export class EstudianteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly curriculum: CurriculumService,
+    private readonly periodoService: PeriodoService,
   ) {}
 
   // ---------- Perfil ----------
@@ -222,6 +231,49 @@ export class EstudianteService {
       .filter((c) => c.tipo === TipoClase.OBLIGATORIA && c.estadoEstudiante === 'APROBADA')
       .map((c) => c.nivel);
     return nivelesAprobados.length > 0 ? Math.max(...nivelesAprobados) + 1 : 1;
+  }
+
+  // ---------- Catálogo de asignaturas disponibles por período ----------
+  //
+  // No existe (todavía) una tabla de "oferta de clases por período": la
+  // disponibilidad de una clase depende solo de prerrequisitos/historial del
+  // estudiante, igual que en obtenerMalla. Lo que aporta el período aquí es
+  // que el catálogo queda amarrado a uno válido y habilitado por el admin
+  // (en vez de mostrarse suelto), no que cambie el conjunto de clases.
+
+  async obtenerPeriodosDisponibles(): Promise<PeriodoView[]> {
+    return this.periodoService.listarHabilitados();
+  }
+
+  async obtenerCatalogoDisponible(
+    userId: string,
+    periodoId: string,
+    currentUser: RequestUser,
+  ): Promise<CatalogoDisponible> {
+    await this.obtenerEstudianteOFallar(userId);
+    if (!periodoId) {
+      throw new BadRequestException('Debes indicar un período académico (periodoId).');
+    }
+    const periodo = await this.prisma.periodo.findUnique({ where: { idperiodo: periodoId } });
+    if (!periodo || periodo.estado !== EstadoPeriodo.HABILITADO) {
+      throw new BadRequestException('El período indicado no existe o no está habilitado para consulta.');
+    }
+
+    const plantillaId = await this.obtenerPlantillaAsignada(userId);
+    if (!plantillaId) {
+      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
+    }
+
+    const malla = await this.construirMallaConEstado(plantillaId, userId, currentUser);
+    const niveles = malla.niveles
+      .map((n) => ({ nivel: n.nivel, clases: n.clases.filter((c) => c.estadoEstudiante === 'DISPONIBLE') }))
+      .filter((n) => n.clases.length > 0);
+
+    return {
+      periodo: { id: periodo.idperiodo, anno: periodo.anno ?? '', periodo: periodo.periodo ?? '' },
+      plantilla: malla.plantilla,
+      niveles,
+    };
   }
 
   // ---------- Pensum (solo lectura + autorreporte de clases cursadas) ----------

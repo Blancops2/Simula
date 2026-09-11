@@ -5,5 +5,6 @@ import { PeriodoService } from './periodo.service';
 @Module({
   controllers: [PeriodoController],
   providers: [PeriodoService],
+  exports: [PeriodoService],
 })
 export class PeriodoModule {}

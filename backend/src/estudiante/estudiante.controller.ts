@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '../common/enums';
 import { CurrentUser, RequestUser } from '../auth/decorators/current-user.decorator';
@@ -39,6 +39,21 @@ export class EstudianteController {
   })
   malla(@CurrentUser() user: RequestUser) {
     return this.estudiante.obtenerMalla(user.userId, user);
+  }
+
+  @Get('periodos')
+  @ApiOperation({ summary: 'Lista los períodos académicos habilitados que el estudiante puede seleccionar.' })
+  periodosDisponibles() {
+    return this.estudiante.obtenerPeriodosDisponibles();
+  }
+
+  @Get('catalogo')
+  @ApiOperation({
+    summary:
+      'Catálogo de asignaturas disponibles para cursar en el período indicado (debe estar habilitado).',
+  })
+  catalogo(@CurrentUser() user: RequestUser, @Query('periodoId') periodoId: string) {
+    return this.estudiante.obtenerCatalogoDisponible(user.userId, periodoId, user);
   }
 
   @Get('historial')

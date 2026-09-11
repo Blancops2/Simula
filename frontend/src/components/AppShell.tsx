@@ -14,7 +14,7 @@ import {
 
 const STUDENT_NAV = [
   { to: '/estudiante', label: 'Mi perfil', icon: IconHome },
-  { to: '/estudiante/malla', label: 'Seleccionar clases', icon: IconLayers },
+  { to: '/estudiante/malla', label: 'Inscripción', icon: IconLayers },
   { to: '/estudiante/historial', label: 'Historial', icon: IconClock },
   { to: '/estudiante/pensum', label: 'Pensum', icon: IconSitemap },
 ];

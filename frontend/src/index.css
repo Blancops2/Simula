@@ -765,6 +765,12 @@ select:focus {
    Curriculum tree (flow-diagram style)
    ========================================================================== */
 
+.catalog-scroll {
+  max-height: 560px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
 .tree {
   position: relative;
   padding-left: 24px;
@@ -977,6 +983,14 @@ select:focus {
 .flow-node-cursada {
   border-top-color: var(--color-success);
   background: var(--color-success-soft);
+}
+
+/* Escala de intensidad por nivel (canvas admin): el fondo es un pastel fijo
+   (no depende del tema claro/oscuro), asi que el texto tambien se fija en
+   #2D3748 para mantener el contraste >= 4.5:1 en los 10 niveles. */
+.flow-node-nivelado .flow-node-nombre,
+.flow-node-nivelado .flow-node-meta {
+  color: #2d3748;
 }
 
 .flow-node-header {

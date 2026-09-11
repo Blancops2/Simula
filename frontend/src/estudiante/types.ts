@@ -81,6 +81,18 @@ export interface PensumArbol {
   niveles: { nivel: number; clases: ClasePensum[] }[];
 }
 
+export interface PeriodoDisponible {
+  id: string;
+  anno: string;
+  periodo: string;
+}
+
+export interface CatalogoDisponible {
+  periodo: PeriodoDisponible;
+  plantilla: { id: string; nombre: string; version: number; activa: boolean; carreraId: string };
+  niveles: { nivel: number; clases: ClaseConEstado[] }[];
+}
+
 export interface InscripcionItem {
   id: string;
   periodo: string;

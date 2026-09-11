@@ -1,8 +1,10 @@
 import type {
+  CatalogoDisponible,
   HistorialItem,
   InscripcionItem,
   MallaConEstado,
   PensumArbol,
+  PeriodoDisponible,
   PerfilEstudiante,
 } from '../estudiante/types';
 import { httpClient } from './httpClient';
@@ -23,6 +25,16 @@ export async function actualizarPerfil(input: ActualizarPerfilInput): Promise<vo
 
 export async function getMalla(): Promise<MallaConEstado> {
   const { data } = await httpClient.get<MallaConEstado>('/estudiante/malla');
+  return data;
+}
+
+export async function getPeriodosDisponibles(): Promise<PeriodoDisponible[]> {
+  const { data } = await httpClient.get<PeriodoDisponible[]>('/estudiante/periodos');
+  return data;
+}
+
+export async function getCatalogo(periodoId: string): Promise<CatalogoDisponible> {
+  const { data } = await httpClient.get<CatalogoDisponible>('/estudiante/catalogo', { params: { periodoId } });
   return data;
 }
 
