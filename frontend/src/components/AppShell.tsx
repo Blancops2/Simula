@@ -9,6 +9,7 @@ import {
   IconLayers,
   IconList,
   IconLogOut,
+  IconRoute,
   IconSitemap,
 } from './icons';
 
@@ -17,12 +18,14 @@ const STUDENT_NAV = [
   { to: '/estudiante/malla', label: 'Inscripción', icon: IconLayers },
   { to: '/estudiante/historial', label: 'Historial', icon: IconClock },
   { to: '/estudiante/pensum', label: 'Pensum', icon: IconSitemap },
+  { to: '/estudiante/plan-estudio', label: 'Plan de estudio', icon: IconRoute },
 ];
 
 const ADMIN_NAV = [
   { to: '/admin', label: 'Panel', icon: IconHome },
   { to: '/admin/plantillas', label: 'Plantillas', icon: IconList },
   { to: '/admin/periodos', label: 'Períodos', icon: IconCalendar },
+  { to: '/admin/plan-estudio', label: 'Plan de estudio', icon: IconRoute },
 ];
 
 interface AppShellProps {

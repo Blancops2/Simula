@@ -671,6 +671,10 @@ select:focus {
   background: var(--color-accent-soft);
 }
 
+.data-table tbody tr.row-aprobada {
+  background: var(--color-success-soft);
+}
+
 .table-actions {
   display: flex;
   gap: 6px;
@@ -855,6 +859,16 @@ select:focus {
 
 .tree-level-title {
   margin-bottom: 12px;
+}
+
+.plan-estudio-anno {
+  margin-bottom: 28px;
+}
+
+.plan-estudio-anno-title {
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .tree-nodes {

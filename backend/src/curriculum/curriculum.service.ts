@@ -193,15 +193,25 @@ export class CurriculumService {
       );
     }
 
-    // Los FK hacia PlantillaMalla_has_Clase/Requisito usan NoAction (SQL
-    // Server no permite varias rutas de cascade), así que hay que limpiar a
-    // mano antes de poder borrar la plantilla.
+    // Los FK hacia PlantillaMalla_has_Clase/Requisito/plan_estudio usan
+    // NoAction (SQL Server no permite varias rutas de cascade), así que hay
+    // que limpiar a mano antes de poder borrar la plantilla.
     await this.prisma.$transaction(async (tx) => {
       const clases = await tx.plantillaMalla_has_Clase.findMany({
         where: { idPlantillaMalla: id },
         select: { idPlantillaMalla_has_Clase: true },
       });
       const idsClases = clases.map((c) => c.idPlantillaMalla_has_Clase);
+
+      // Los periodos del plan de estudio de ESTA malla solo pueden referenciar
+      // clases de idsClases (regla de negocio validada en PlanEstudioService),
+      // así que limpiar por esas clases ya cubre todo su junction.
+      if (idsClases.length > 0) {
+        await tx.planEstudio_has_PlantillaMalla_has_Clase.deleteMany({
+          where: { idPlantillaMalla_has_Clase: { in: idsClases } },
+        });
+      }
+      await tx.planEstudio.deleteMany({ where: { idPlantillaMalla: id } });
 
       if (idsClases.length > 0) {
         await tx.requisito.deleteMany({
@@ -449,7 +459,11 @@ export class CurriculumService {
       // El FK Requisito->PlantillaMalla_has_Clase usa NoAction en ambos
       // lados (SQL Server no permite dos rutas de cascade hacia la misma
       // tabla), así que hay que borrar a mano las relaciones donde esta fila
-      // participa, en cualquiera de los dos roles.
+      // participa, en cualquiera de los dos roles. Igual el junction de
+      // plan_estudio, que también apunta a esta fila con NoAction.
+      await tx.planEstudio_has_PlantillaMalla_has_Clase.deleteMany({
+        where: { idPlantillaMalla_has_Clase: id },
+      });
       await tx.requisito.deleteMany({
         where: { OR: [{ idPlantillaMalla_has_Clase: id }, { idClaseRequisito: id }] },
       });

@@ -106,6 +106,7 @@ model PlantillaMalla {
   versiones       PlantillaMalla[]          @relation("VersionesPlantilla")
   clases          PlantillaMalla_has_Clase[]
   estudiantes     PlantillaMalla_has_User[]
+  planesEstudio   PlanEstudio[]
 }
 
 model PlantillaMalla_has_Clase {
@@ -128,6 +129,7 @@ model PlantillaMalla_has_Clase {
   requisitosPropios  Requisito[]          @relation("ClaseConRequisito")
   // Requisitos donde ESTA fila es exigida por otra clase.
   esRequisitoDe      Requisito[]          @relation("ClaseEsRequisito")
+  planesEstudioClases PlanEstudio_has_PlantillaMalla_has_Clase[]
 
   @@id([idPlantillaMalla_has_Clase, idPlantillaMalla, idClase], map: "PK_PlantillaMalla_has_Clase")
 }
@@ -142,6 +144,42 @@ model Requisito {
 
   clase     PlantillaMalla_has_Clase @relation("ClaseConRequisito", fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase1")
   requisito PlantillaMalla_has_Clase @relation("ClaseEsRequisito", fields: [idClaseRequisito], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase2")
+}
+
+// Tabla nueva: plan de estudio RECOMENDADO por malla (ver DDL.sql para el
+// razonamiento completo). Cada fila es un periodo sugerido (texto libre,
+// ej. "primer periodo"), agrupado dentro de un "anno" también de texto
+// libre (ej. "primer año" -- etiqueta de secuencia dentro de la malla, NO
+// un año calendario real) dentro de una PlantillaMalla puntual; no se
+// amarra al catalogo Periodo (ese es un periodo academico real, compartido
+// por todos los estudiantes) porque esto es solo una recomendacion de
+// secuencia -- no seguirla no debe bloquear al estudiante.
+model PlanEstudio {
+  idplan_estudio   String    @id(map: "PK_plan_estudio") @db.VarChar(45)
+  idPlantillaMalla String    @db.VarChar(45)
+  anno             String?   @db.VarChar(45)
+  periodo          String?   @db.VarChar(45)
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  plantillaMalla PlantillaMalla                             @relation(fields: [idPlantillaMalla], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_plan_estudio_PlantillaMalla1")
+  clases         PlanEstudio_has_PlantillaMalla_has_Clase[]
+
+  @@unique([idPlantillaMalla, anno, periodo], map: "UQ_plan_estudio_malla_anno_periodo")
+  @@map("plan_estudio")
+}
+
+// Junction: que clases (filas de PlantillaMalla_has_Clase, de la MISMA
+// malla que su PlanEstudio) se recomiendan en cada periodo del plan.
+model PlanEstudio_has_PlantillaMalla_has_Clase {
+  idplan_estudio             String @db.VarChar(45)
+  idPlantillaMalla_has_Clase String @db.VarChar(45)
+
+  planEstudio         PlanEstudio              @relation(fields: [idplan_estudio], references: [idplan_estudio], onUpdate: NoAction, map: "fk_plan_estudio_has_PlantillaMalla_has_Clase_plan_estudio1")
+  plantillaMallaClase PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_plan_estudio_has_PlantillaMalla_has_Clase_PMhC1")
+
+  @@id([idplan_estudio, idPlantillaMalla_has_Clase], map: "PK_plan_estudio_has_PlantillaMalla_has_Clase")
+  @@map("plan_estudio_has_PlantillaMalla_has_Clase")
 }
 
 // idperiodo (HU-03-03, ver migrations/proposed/2026-09-08_periodo.sql):

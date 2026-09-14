@@ -32,6 +32,14 @@ export function AdminDashboard() {
           Gestionar períodos
         </Link>
       </section>
+
+      <section className="panel">
+        <h2>Plan de estudio recomendado</h2>
+        <p>Define, por carrera y versión de malla, la secuencia de periodos y clases sugerida al estudiante.</p>
+        <Link to="/admin/plan-estudio" className="btn btn-primary">
+          Gestionar plan de estudio
+        </Link>
+      </section>
     </AppShell>
   );
 }

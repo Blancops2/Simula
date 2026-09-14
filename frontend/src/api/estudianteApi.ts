@@ -5,6 +5,7 @@ import type {
   PensumArbol,
   PeriodoDisponible,
   PerfilEstudiante,
+  PlanEstudioPeriodoConEstado,
 } from '../estudiante/types';
 import { httpClient } from './httpClient';
 
@@ -24,6 +25,11 @@ export async function actualizarPerfil(input: ActualizarPerfilInput): Promise<vo
 
 export async function getMalla(): Promise<MallaConEstado> {
   const { data } = await httpClient.get<MallaConEstado>('/estudiante/malla');
+  return data;
+}
+
+export async function getPlanEstudio(): Promise<PlanEstudioPeriodoConEstado[]> {
+  const { data } = await httpClient.get<PlanEstudioPeriodoConEstado[]>('/estudiante/plan-estudio');
   return data;
 }
 

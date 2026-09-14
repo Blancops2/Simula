@@ -14,6 +14,7 @@ import {
 import { RequestUser } from '../auth/decorators/current-user.decorator';
 import { CurriculumService, ClaseView, PlantillaArbol, RequisitoView } from '../curriculum/curriculum.service';
 import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
+import { PlanEstudioService } from '../plan-estudio/plan-estudio.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
@@ -59,6 +60,7 @@ export class EstudianteService {
     private readonly prisma: PrismaService,
     private readonly curriculum: CurriculumService,
     private readonly periodoService: PeriodoService,
+    private readonly planEstudioService: PlanEstudioService,
   ) {}
 
   // ---------- Perfil ----------
@@ -127,6 +129,36 @@ export class EstudianteService {
       throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
     }
     return this.construirMallaConEstado(plantillaId, userId, currentUser);
+  }
+
+  // Plan de estudio recomendado (solo lectura para el estudiante, ver
+  // PlanEstudioService/DDL.sql): los mismos periodos que administra el
+  // admin para la malla asignada, con cada clase cruzada con el historial
+  // del estudiante (aprobada/en curso/disponible/bloqueada) igual que
+  // obtenerMalla, para poder resaltar lo ya cursado.
+  async obtenerPlanEstudio(
+    userId: string,
+    currentUser: RequestUser,
+  ): Promise<{ id: string; anno: string; periodo: string; clases: ClaseConEstado[] }[]> {
+    await this.obtenerEstudianteOFallar(userId);
+    const plantillaId = await this.obtenerPlantillaAsignada(userId);
+    if (!plantillaId) {
+      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
+    }
+
+    const [malla, periodos] = await Promise.all([
+      this.construirMallaConEstado(plantillaId, userId, currentUser),
+      this.planEstudioService.listarPorPlantilla(plantillaId),
+    ]);
+
+    const clasesPorId = new Map(malla.niveles.flatMap((n) => n.clases).map((c) => [c.id, c]));
+
+    return periodos.map((p) => ({
+      id: p.id,
+      anno: p.anno,
+      periodo: p.periodo,
+      clases: p.clasesIds.map((id) => clasesPorId.get(id)).filter((c): c is ClaseConEstado => !!c),
+    }));
   }
 
   private async construirMallaConEstado(

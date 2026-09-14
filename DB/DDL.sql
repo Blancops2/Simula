@@ -189,6 +189,45 @@ CREATE TABLE Requisito (
 );
 GO
 
+/* -----------------------------------------------------------------------
+   Plan de estudio recomendado.
+   Catalogo de secuencia sugerida de clases por malla: cada fila de
+   "plan_estudio" representa UN periodo recomendado (ej. "primer periodo",
+   "segundo periodo" -- texto libre, no numero, por eso VARCHAR), agrupado
+   dentro de un "anno" tambien de texto libre (ej. "primer año", "segundo
+   año" -- igual que periodo, es una etiqueta de secuencia dentro de la
+   malla, NO un año calendario real), dentro de una PlantillaMalla puntual;
+   el junction "plan_estudio_has_..." conecta ese periodo con TODAS las
+   clases (filas de PlantillaMalla_has_Clase, ya pertenecientes a esa misma
+   malla) que se recomiendan cursar en el.
+
+   NO se amarra al catalogo "periodo" (el de fechas/habilitado-deshabilitado
+   de HU-03-03): ese catalogo representa un periodo academico REAL y
+   compartido por todos los estudiantes, mientras que este es solo una
+   RECOMENDACION de secuencia por malla -- el estudiante puede no seguirla
+   (no completar lo sugerido en su "primer periodo" no debe bloquearlo) y
+   distintos estudiantes de la misma malla no necesariamente arrancan en el
+   mismo periodo real.
+   ----------------------------------------------------------------------- */
+CREATE TABLE plan_estudio (
+    idplan_estudio     VARCHAR(45) NOT NULL,
+    idPlantillaMalla   VARCHAR(45) NOT NULL,
+    anno               VARCHAR(45) NULL,
+    periodo            VARCHAR(45) NULL,
+    createdAt          DATETIME2   NULL,
+    updatedAt          DATETIME2   NULL,
+    CONSTRAINT PK_plan_estudio PRIMARY KEY (idplan_estudio)
+);
+GO
+
+CREATE TABLE plan_estudio_has_PlantillaMalla_has_Clase (
+    idplan_estudio              VARCHAR(45) NOT NULL,
+    idPlantillaMalla_has_Clase  VARCHAR(45) NOT NULL,
+    CONSTRAINT PK_plan_estudio_has_PlantillaMalla_has_Clase PRIMARY KEY
+        (idplan_estudio, idPlantillaMalla_has_Clase)
+);
+GO
+
 -- HU-03-03/HU-03-04: las columnas libres "periodo" (string "AAAA-P") y
 -- "anno" se reemplazan por la FK idperiodo -> periodo(idperiodo), NOT
 -- NULL: el año ya vive en periodo.anno, así que repetirlo por fila era
@@ -274,6 +313,11 @@ GO
 -- de año y período académico.
 ALTER TABLE periodo
     ADD CONSTRAINT UQ_periodo_anno_periodo UNIQUE (anno, periodo);
+GO
+
+-- Una misma malla no puede tener dos filas de "primer año" / "primer periodo", etc.
+ALTER TABLE plan_estudio
+    ADD CONSTRAINT UQ_plan_estudio_malla_anno_periodo UNIQUE (idPlantillaMalla, anno, periodo);
 GO
 
 -- =====================================================================
@@ -364,6 +408,21 @@ GO
 ALTER TABLE PlantillaMalla_has_User
     ADD CONSTRAINT fk_PlantillaMalla_has_User_User1
     FOREIGN KEY (idUser) REFERENCES [User] (idUser);
+GO
+
+ALTER TABLE plan_estudio
+    ADD CONSTRAINT fk_plan_estudio_PlantillaMalla1
+    FOREIGN KEY (idPlantillaMalla) REFERENCES PlantillaMalla (idPlantillaMalla);
+GO
+
+ALTER TABLE plan_estudio_has_PlantillaMalla_has_Clase
+    ADD CONSTRAINT fk_plan_estudio_has_PlantillaMalla_has_Clase_plan_estudio1
+    FOREIGN KEY (idplan_estudio) REFERENCES plan_estudio (idplan_estudio);
+GO
+
+ALTER TABLE plan_estudio_has_PlantillaMalla_has_Clase
+    ADD CONSTRAINT fk_plan_estudio_has_PlantillaMalla_has_Clase_PMhC1
+    FOREIGN KEY (idPlantillaMalla_has_Clase) REFERENCES PlantillaMalla_has_Clase (idPlantillaMalla_has_Clase);
 GO
 
 /* =====================================================================

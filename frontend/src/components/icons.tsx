@@ -94,3 +94,13 @@ export function IconSitemap(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function IconRoute(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M5 8v3a4 4 0 0 0 4 4h6a4 4 0 0 1 4 4" />
+    </Icon>
+  );
+}

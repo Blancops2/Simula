@@ -47,6 +47,15 @@ export class EstudianteController {
     return this.estudiante.obtenerPeriodosDisponibles();
   }
 
+  @Get('plan-estudio')
+  @ApiOperation({
+    summary:
+      'Plan de estudio recomendado (solo lectura) de la malla asignada: periodos con sus clases, cada una marcada como aprobada/en curso/disponible/bloqueada según el historial del estudiante.',
+  })
+  planEstudio(@CurrentUser() user: RequestUser) {
+    return this.estudiante.obtenerPlanEstudio(user.userId, user);
+  }
+
   @Get('historial')
   @ApiOperation({ summary: 'Historial de clases cursadas por el estudiante autenticado.' })
   historial(@CurrentUser() user: RequestUser) {

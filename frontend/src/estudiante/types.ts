@@ -31,6 +31,13 @@ export interface MallaConEstado {
   niveles: { nivel: number; clases: ClaseConEstado[] }[];
 }
 
+export interface PlanEstudioPeriodoConEstado {
+  id: string;
+  anno: string;
+  periodo: string;
+  clases: ClaseConEstado[];
+}
+
 export interface AvanceAcademico {
   unidadesValorativasAprobadas: number;
   unidadesValorativasTotalesObligatorias: number;
