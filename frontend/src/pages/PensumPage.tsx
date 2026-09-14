@@ -122,7 +122,7 @@ export function PensumPage() {
           type: 'requisito',
           source: r.claseId,
           target: clase.id,
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#5b73f5' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#fbb515' },
           data: { tipo: 'PRERREQUISITO', highlight: 'normal', onDelete: () => {} },
         });
       }
@@ -132,7 +132,7 @@ export function PensumPage() {
           type: 'requisito',
           source: r.claseId,
           target: clase.id,
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#8a90a0' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#fbb515' },
           data: { tipo: 'CORREQUISITO', highlight: 'normal', onDelete: () => {} },
         });
       }
@@ -172,7 +172,7 @@ export function PensumPage() {
       {todasLasClases.length === 0 ? (
         <p>Tu plantilla de malla todavía no tiene clases cargadas.</p>
       ) : (
-        <div className="flow-canvas-wrapper">
+        <div className="flow-canvas-wrapper pensum-canvas">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -184,11 +184,11 @@ export function PensumPage() {
             nodesDraggable={false}
             nodesConnectable={false}
             edgesFocusable={false}
-            colorMode="system"
+            colorMode="light"
             fitView
             proOptions={{ hideAttribution: true }}
           >
-            <Background gap={20} />
+            <Background gap={20} color="rgba(255, 255, 255, 0.28)" />
             <Controls showInteractive={false} />
             <MiniMap pannable zoomable />
           </ReactFlow>

@@ -241,7 +241,7 @@ export function SeleccionClasesPage() {
               {periodos.length > 0 && (
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-catalog-blue btn-sm"
                   onClick={cambiarPeriodo}
                   disabled={periodoIdBorrador === periodoId || cambiandoPeriodo}
                 >
@@ -253,7 +253,7 @@ export function SeleccionClasesPage() {
               </span>
               <button
                 type="button"
-                className="btn btn-primary"
+                className="btn btn-catalog-blue"
                 onClick={hacerInscripcion}
                 disabled={seleccion.size === 0 || !periodoId || inscribiendo || cambiandoPeriodo}
               >
@@ -365,7 +365,7 @@ export function SeleccionClasesPage() {
                         <td className="table-actions">
                           <button
                             type="button"
-                            className="btn btn-secondary btn-sm"
+                            className="btn btn-catalog-blue btn-sm"
                             onClick={() => cancelarClase(i.id)}
                             disabled={cancelandoId === i.id}
                           >
