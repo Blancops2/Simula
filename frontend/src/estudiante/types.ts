@@ -89,14 +89,9 @@ export interface PeriodoDisponible {
   estado: EstadoPeriodo;
 }
 
-export interface CatalogoDisponible {
-  periodo: PeriodoDisponible;
-  plantilla: { id: string; nombre: string; version: number; activa: boolean; carreraId: string };
-  niveles: { nivel: number; clases: ClaseConEstado[] }[];
-}
-
 export interface InscripcionItem {
   id: string;
+  periodoId: string;
   periodo: string;
   clase: {
     id: string;

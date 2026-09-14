@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { getCatalogo, getPeriodosDisponibles } from '../api/estudianteApi';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { cancelarInscripcion, getInscripciones, getMalla, getPeriodosDisponibles, inscribirClases } from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
-import type { CatalogoDisponible, PeriodoDisponible } from '../estudiante/types';
+import type { InscripcionItem, MallaConEstado, PeriodoDisponible } from '../estudiante/types';
+
+// HU-03-04: tope de unidades valorativas por matrícula. Cuenta tanto lo que
+// el estudiante ya tiene inscrito en el período elegido (otra pestaña,
+// sesión anterior) como lo que va marcando ahora, para que no pueda rodear
+// el tope inscribiendo en tandas.
+const MAX_UNIDADES_VALORATIVAS = 25;
 
 function errorMessage(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback;
@@ -12,101 +17,193 @@ function etiquetaPeriodo(p: { anno: string; periodo: string }): string {
   return `${p.anno} - Período ${p.periodo}`;
 }
 
-function etiquetaEstado(estado: string): string {
-  return estado === 'habilitado' ? 'Habilitado' : 'Deshabilitado';
-}
-
 export function SeleccionClasesPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [malla, setMalla] = useState<MallaConEstado | null>(null);
   const [periodos, setPeriodos] = useState<PeriodoDisponible[]>([]);
   const [periodoId, setPeriodoId] = useState<string>('');
-  const [periodoConfirmado, setPeriodoConfirmado] = useState<PeriodoDisponible | null>(null);
-  const [catalogo, setCatalogo] = useState<CatalogoDisponible | null>(null);
+  // Elección en el <select>, todavía no aplicada: separada de `periodoId`
+  // (el período realmente activo para el tope de U.V. y para matricular) a
+  // propósito, para que cambiar el <select> no dispare nada por sí solo —
+  // solo el botón "Cambiar período" aplica el cambio.
+  const [periodoIdBorrador, setPeriodoIdBorrador] = useState<string>('');
+  const [inscripciones, setInscripciones] = useState<InscripcionItem[]>([]);
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [cargandoPeriodos, setCargandoPeriodos] = useState(true);
-  const [cargandoCatalogo, setCargandoCatalogo] = useState(false);
+  const [mensajeExito, setMensajeExito] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [cambiandoPeriodo, setCambiandoPeriodo] = useState(false);
+  const [inscribiendo, setInscribiendo] = useState(false);
+  const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
+  // Las clases se muestran de inmediato (no dependen de elegir un período
+  // primero): el período solo se necesita al final, cuando el estudiante ya
+  // eligió qué matricular y hace clic en "Hacer inscripción".
   useEffect(() => {
     (async () => {
-      setCargandoPeriodos(true);
+      setCargando(true);
       setError(null);
       try {
-        const disponibles = await getPeriodosDisponibles();
-        setPeriodos(disponibles);
-
-        // Un período pedido por query param (ej. enlace externo o URL editada
-        // a mano) solo puede pre-cargar la elección en el selector: si no está
-        // entre los habilitados se rechaza con mensaje claro, y de todas
-        // formas sigue exigiendo confirmación explícita (no se auto-confirma).
-        const periodoSolicitado = searchParams.get('periodoId');
-        if (periodoSolicitado) {
-          const existe = disponibles.some((p) => p.id === periodoSolicitado);
-          if (existe) {
-            setPeriodoId(periodoSolicitado);
-          } else {
-            setError('El período indicado no existe o no está habilitado. Selecciona uno de la lista de períodos disponibles.');
-            setPeriodoId(disponibles[0]?.id ?? '');
-          }
-          setSearchParams({}, { replace: true });
-        } else {
-          setPeriodoId(disponibles[0]?.id ?? '');
-        }
+        const [mallaData, periodosData, inscripcionesData] = await Promise.all([
+          getMalla(),
+          getPeriodosDisponibles(),
+          getInscripciones(),
+        ]);
+        setMalla(mallaData);
+        setPeriodos(periodosData);
+        setPeriodoId(periodosData[0]?.id ?? '');
+        setPeriodoIdBorrador(periodosData[0]?.id ?? '');
+        setInscripciones(inscripcionesData);
       } catch (err) {
-        setError(errorMessage(err, 'No se pudieron cargar los períodos académicos.'));
+        setError(errorMessage(err, 'No se pudo cargar la información de matrícula.'));
       } finally {
-        setCargandoPeriodos(false);
+        setCargando(false);
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     })();
   }, []);
 
-  const confirmarSeleccion = useCallback(async () => {
-    const elegido = periodos.find((p) => p.id === periodoId);
-    if (!elegido) {
-      setError('Selecciona un período de la lista de disponibles antes de continuar.');
+  // Agrupa las inscripciones vigentes por período para la tabla de resumen
+  // de más abajo. Solo se agrupan períodos que el estudiante realmente
+  // llenó (tienen al menos una inscripción); no se muestra un grupo vacío
+  // por cada período habilitado.
+  const inscripcionesPorPeriodo = useMemo(() => {
+    const grupos = new Map<string, { periodoId: string; periodo: string; items: InscripcionItem[] }>();
+    inscripciones.forEach((i) => {
+      const grupo = grupos.get(i.periodoId) ?? { periodoId: i.periodoId, periodo: i.periodo, items: [] };
+      grupo.items.push(i);
+      grupos.set(i.periodoId, grupo);
+    });
+    return [...grupos.values()].sort((a, b) => b.periodo.localeCompare(a.periodo));
+  }, [inscripciones]);
+
+  const inscripcionPorClaseId = useMemo(() => {
+    const mapa = new Map<string, InscripcionItem>();
+    inscripciones.forEach((i) => mapa.set(i.clase.id, i));
+    return mapa;
+  }, [inscripciones]);
+
+  const nivelesDisponibles = useMemo(
+    () =>
+      (malla?.niveles ?? [])
+        .map((n) => ({ nivel: n.nivel, clases: n.clases.filter((c) => c.estadoEstudiante === 'DISPONIBLE') }))
+        .filter((n) => n.clases.length > 0),
+    [malla],
+  );
+  const unidadesValorativasPorId = useMemo(() => {
+    const mapa = new Map<string, number>();
+    nivelesDisponibles.forEach((n) => n.clases.forEach((c) => mapa.set(c.id, c.unidadesValorativas)));
+    return mapa;
+  }, [nivelesDisponibles]);
+
+  // El tope de 25 U.V. es por período: solo cuenta lo ya inscrito EN el
+  // período que el estudiante tiene elegido ahora mismo para matricular.
+  const uvYaInscritas = inscripciones
+    .filter((i) => i.periodoId === periodoId)
+    .reduce((total, i) => total + i.clase.unidadesValorativas, 0);
+  const uvSeleccionadas = [...seleccion].reduce((total, id) => total + (unidadesValorativasPorId.get(id) ?? 0), 0);
+  const uvTotal = uvYaInscritas + uvSeleccionadas;
+
+  const alternarSeleccion = useCallback(
+    (claseId: string, unidadesValorativas: number, marcar: boolean) => {
+      setSeleccion((prev) => {
+        const siguiente = new Set(prev);
+        if (marcar) {
+          if (uvTotal + unidadesValorativas > MAX_UNIDADES_VALORATIVAS) {
+            return prev;
+          }
+          siguiente.add(claseId);
+        } else {
+          siguiente.delete(claseId);
+        }
+        return siguiente;
+      });
+    },
+    [uvTotal],
+  );
+
+  const hacerInscripcion = useCallback(async () => {
+    if (seleccion.size === 0 || !periodoId) {
       return;
     }
-    setCargandoCatalogo(true);
+    setInscribiendo(true);
     setError(null);
+    setMensajeExito(null);
     try {
-      // El backend revalida existencia + estado habilitado del período: es la
-      // fuente de verdad, incluso si esta elección viene precargada de la URL.
-      const datos = await getCatalogo(elegido.id);
-      setCatalogo(datos);
-      setPeriodoConfirmado(elegido);
+      // El backend revalida en este momento que el período elegido siga
+      // existiendo y habilitado (pudo cambiar de estado mientras el
+      // estudiante seleccionaba clases); si no, responde con un error claro
+      // que se muestra abajo en vez de dejar avanzar la inscripción.
+      const actualizadas = await inscribirClases(periodoId, [...seleccion]);
+      setInscripciones(actualizadas);
+      setSeleccion(new Set());
+      setMensajeExito('Inscripción realizada correctamente.');
     } catch (err) {
-      setCatalogo(null);
-      setPeriodoConfirmado(null);
-      setError(errorMessage(err, 'No se pudo confirmar el período seleccionado.'));
+      setError(errorMessage(err, 'No se pudo completar la inscripción.'));
+      // El error más probable en este punto es que el período elegido dejó
+      // de estar habilitado entre que se cargó la página y este clic: se
+      // refresca la lista de períodos para que el <select> deje de
+      // ofrecerlo (AC2 — el cambio de estado se refleja en el siguiente
+      // refresco, no solo si el estudiante recarga la página entera).
+      try {
+        setPeriodos(await getPeriodosDisponibles());
+      } catch {
+        // Si ni siquiera se puede refrescar la lista, se deja el error de
+        // arriba tal cual: no tiene sentido pisarlo con uno secundario.
+      }
     } finally {
-      setCargandoCatalogo(false);
+      setInscribiendo(false);
     }
-  }, [periodos, periodoId]);
+  }, [seleccion, periodoId]);
 
-  const cambiarPeriodo = useCallback(() => {
-    setPeriodoConfirmado(null);
-    setCatalogo(null);
+  // Aplica el período elegido en el <select> (solo si de verdad cambió) y
+  // "recarga": descarta la selección pendiente (las U.V. ya marcadas eran
+  // relativas al período anterior, no tiene sentido arrastrarlas a uno
+  // nuevo), refresca la lista de períodos habilitados y las inscripciones
+  // vigentes por si algo cambió mientras tanto (otra pestaña, un admin
+  // deshabilitando el período, etc. — AC2).
+  const cambiarPeriodo = useCallback(async () => {
+    if (!periodoIdBorrador || periodoIdBorrador === periodoId) {
+      return;
+    }
+    setCambiandoPeriodo(true);
     setError(null);
+    setMensajeExito(null);
+    try {
+      const [periodosData, inscripcionesData] = await Promise.all([getPeriodosDisponibles(), getInscripciones()]);
+      setPeriodos(periodosData);
+      // El período elegido en el <select> pudo dejar de estar habilitado
+      // justo mientras se refrescaba: si ya no aparece en la lista fresca,
+      // no se aplica (se avisa y se mantiene el período activo anterior).
+      if (!periodosData.some((p) => p.id === periodoIdBorrador)) {
+        setPeriodoIdBorrador(periodoId);
+        setError('El período elegido ya no está habilitado. Elige otro de la lista actualizada.');
+        return;
+      }
+      setPeriodoId(periodoIdBorrador);
+      setInscripciones(inscripcionesData);
+      setSeleccion(new Set());
+    } catch (err) {
+      setError(errorMessage(err, 'No se pudo cambiar de período.'));
+    } finally {
+      setCambiandoPeriodo(false);
+    }
+  }, [periodoId, periodoIdBorrador]);
+
+  const cancelarClase = useCallback(async (inscripcionId: string) => {
+    setCancelandoId(inscripcionId);
+    setError(null);
+    setMensajeExito(null);
+    try {
+      await cancelarInscripcion(inscripcionId);
+      setInscripciones((prev) => prev.filter((i) => i.id !== inscripcionId));
+      setMensajeExito('Inscripción cancelada.');
+    } catch (err) {
+      setError(errorMessage(err, 'No se pudo cancelar la inscripción.'));
+    } finally {
+      setCancelandoId(null);
+    }
   }, []);
 
-  // El período confirmado se muestra en una barra de contexto dentro del
-  // encabezado (sticky), no en el cuerpo de la página: así queda visible en
-  // todo momento mientras el estudiante navega/hace scroll en el catálogo,
-  // en vez de perderse si el contenido de la página crece.
-  const contextBar = periodoConfirmado ? (
-    <div className="context-bar">
-      <span>Simulando matrícula para el período</span>
-      <strong>{etiquetaPeriodo(periodoConfirmado)}</strong>
-      <span className={`badge ${periodoConfirmado.estado === 'habilitado' ? 'badge-success' : 'badge-neutral'}`}>
-        {etiquetaEstado(periodoConfirmado.estado)}
-      </span>
-      <button type="button" className="btn btn-secondary btn-sm" onClick={cambiarPeriodo}>
-        Cambiar período
-      </button>
-    </div>
-  ) : undefined;
-
-  if (cargandoPeriodos) {
+  if (cargando) {
     return (
       <AppShell title="Inscripción" backTo="/estudiante" backLabel="Mi perfil">
         <p>Cargando…</p>
@@ -115,81 +212,173 @@ export function SeleccionClasesPage() {
   }
 
   return (
-    <AppShell title="Inscripción" backTo="/estudiante" backLabel="Mi perfil" contextBar={contextBar}>
+    <AppShell title="Inscripción" backTo="/estudiante" backLabel="Mi perfil">
       {error && <p className="page-error">{error}</p>}
+      {mensajeExito && <p className="page-success">{mensajeExito}</p>}
 
-      {!periodoConfirmado && (
+      {malla && (
         <section className="panel">
-          <h2>Período académico</h2>
-          {periodos.length === 0 ? (
-            <p>No hay períodos académicos habilitados en este momento.</p>
-          ) : (
+          <div className="panel-header">
             <div>
+              <h2>Catálogo de asignaturas</h2>
+              <p className="tree-node-meta">Plan de estudios: {malla.plantilla.nombre}</p>
+            </div>
+            <div className="panel-header-actions">
               <label className="field">
-                Selecciona el período sobre el que deseas simular tu matrícula
-                <select value={periodoId} onChange={(e) => setPeriodoId(e.target.value)}>
-                  {periodos.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {etiquetaPeriodo(p)}
-                    </option>
-                  ))}
-                </select>
+                Período para matricular
+                {periodos.length === 0 ? (
+                  <span className="tree-node-meta">No hay períodos habilitados.</span>
+                ) : (
+                  <select value={periodoIdBorrador} onChange={(e) => setPeriodoIdBorrador(e.target.value)}>
+                    {periodos.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {etiquetaPeriodo(p)}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </label>
+              {periodos.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={cambiarPeriodo}
+                  disabled={periodoIdBorrador === periodoId || cambiandoPeriodo}
+                >
+                  {cambiandoPeriodo ? 'Cambiando…' : 'Cambiar período'}
+                </button>
+              )}
+              <span className={`badge ${uvTotal >= MAX_UNIDADES_VALORATIVAS ? 'badge-warning' : 'badge-neutral'}`}>
+                {uvTotal} / {MAX_UNIDADES_VALORATIVAS} U.V. seleccionadas
+              </span>
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={confirmarSeleccion}
-                disabled={cargandoCatalogo}
+                onClick={hacerInscripcion}
+                disabled={seleccion.size === 0 || !periodoId || inscribiendo || cambiandoPeriodo}
               >
-                {cargandoCatalogo ? 'Confirmando…' : 'Confirmar selección'}
+                {inscribiendo ? 'Inscribiendo…' : 'Hacer inscripción'}
               </button>
             </div>
-          )}
-        </section>
-      )}
+          </div>
 
-      {periodoConfirmado && catalogo && (
-        <section className="panel">
-          <h2>Catálogo de asignaturas</h2>
-          <p className="tree-node-meta">Plan de estudios: {catalogo.plantilla.nombre}</p>
-
-          {catalogo.niveles.length === 0 ? (
-            <p>No hay asignaturas disponibles para el período {etiquetaPeriodo(catalogo.periodo)}.</p>
+          {nivelesDisponibles.length === 0 ? (
+            <p>No tienes asignaturas disponibles para matricular en este momento.</p>
           ) : (
             <div className="catalog-scroll">
               <section className="tree">
-                {catalogo.niveles.map((n) => (
+                {nivelesDisponibles.map((n) => (
                   <div key={n.nivel} className="tree-level">
                     <h3 className="tree-level-title">Nivel {n.nivel}</h3>
                     <div className="tree-nodes">
-                      {n.clases.map((clase) => (
-                        <div key={clase.id} className="tree-node tree-node-disponible">
-                          <div className="tree-node-title">
-                            <strong>{clase.codigo}</strong> — {clase.nombre}
-                          </div>
-                          <div className="tree-node-meta">
-                            {clase.unidadesValorativas} U.V. ·{' '}
-                            {clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}
-                          </div>
+                      {n.clases.map((clase) => {
+                        const inscripcion = inscripcionPorClaseId.get(clase.id);
+                        // Inscrita en OTRO período (no el que se tiene activo ahora mismo):
+                        // se ve gris/apagada y no admite ninguna acción directa desde la
+                        // tarjeta (ni seleccionarla ni cancelarla) — para eso está la tabla
+                        // "Mis inscripciones" de más abajo. Inscrita en el período activo,
+                        // o sin inscribir todavía, se trata igual que antes (tarjeta
+                        // amarilla): solo cambia que ya no se puede cancelar desde aquí.
+                        const inscritaEnOtroPeriodo = !!inscripcion && inscripcion.periodoId !== periodoId;
+                        const marcada = seleccion.has(clase.id);
+                        const superaTope =
+                          !marcada && !inscripcion && uvTotal + clase.unidadesValorativas > MAX_UNIDADES_VALORATIVAS;
+                        return (
+                          <div
+                            key={clase.id}
+                            className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
+                          >
+                            <div className="tree-node-title">
+                              <strong>{clase.codigo}</strong> — {clase.nombre}
+                            </div>
+                            <div className="tree-node-meta">
+                              {clase.unidadesValorativas} U.V. ·{' '}
+                              {clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}
+                            </div>
 
-                          {clase.prerrequisitos.length > 0 && (
-                            <div className="tree-node-meta">
-                              Prerrequisitos: {clase.prerrequisitos.map((p) => p.codigo).join(', ')}
-                            </div>
-                          )}
-                          {clase.correquisitos.length > 0 && (
-                            <div className="tree-node-meta">
-                              Correquisitos: {clase.correquisitos.map((p) => p.codigo).join(', ')}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                            {clase.prerrequisitos.length > 0 && (
+                              <div className="tree-node-meta">
+                                Prerrequisitos: {clase.prerrequisitos.map((p) => p.codigo).join(', ')}
+                              </div>
+                            )}
+                            {clase.correquisitos.length > 0 && (
+                              <div className="tree-node-meta">
+                                Correquisitos: {clase.correquisitos.map((p) => p.codigo).join(', ')}
+                              </div>
+                            )}
+
+                            {inscripcion ? (
+                              <span className={`badge ${inscritaEnOtroPeriodo ? 'badge-neutral' : 'badge-success'}`}>
+                                Ya inscrita — {inscripcion.periodo}
+                              </span>
+                            ) : (
+                              <label className="tree-node-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={marcada}
+                                  disabled={superaTope}
+                                  onChange={(e) =>
+                                    alternarSeleccion(clase.id, clase.unidadesValorativas, e.target.checked)
+                                  }
+                                />
+                                {superaTope ? 'Supera el tope de 25 U.V.' : 'Seleccionar para matricular'}
+                              </label>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
               </section>
             </div>
           )}
+        </section>
+      )}
+
+      {inscripcionesPorPeriodo.length > 0 && (
+        <section className="panel">
+          <h2>Mis inscripciones</h2>
+          {inscripcionesPorPeriodo.map((grupo) => (
+            <div key={grupo.periodoId} className="tree-level">
+              <h3 className="tree-level-title">Período {grupo.periodo}</h3>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Código</th>
+                      <th>Clase</th>
+                      <th>Nivel</th>
+                      <th>U.V.</th>
+                      <th>Tipo</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {grupo.items.map((i) => (
+                      <tr key={i.id}>
+                        <td>{i.clase.codigo}</td>
+                        <td>{i.clase.nombre}</td>
+                        <td>{i.clase.nivel}</td>
+                        <td>{i.clase.unidadesValorativas}</td>
+                        <td>{i.clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}</td>
+                        <td className="table-actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => cancelarClase(i.id)}
+                            disabled={cancelandoId === i.id}
+                          >
+                            {cancelandoId === i.id ? 'Cancelando…' : 'Cancelar inscripción'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </section>
       )}
     </AppShell>

@@ -18,7 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
 import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
-import { periodoActual, semestreActual } from './periodo.util';
+import { semestreActual } from './periodo.util';
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -51,12 +51,6 @@ export interface ClasePensum extends ClaseView {
 export interface PensumArbol {
   plantilla: Pick<PlantillaArbol, 'id' | 'nombre' | 'version' | 'activa' | 'carreraId'>;
   niveles: { nivel: number; clases: ClasePensum[] }[];
-}
-
-export interface CatalogoDisponible {
-  periodo: Pick<PeriodoView, 'id' | 'anno' | 'periodo'>;
-  plantilla: Pick<PlantillaArbol, 'id' | 'nombre' | 'version' | 'activa' | 'carreraId'>;
-  niveles: { nivel: number; clases: ClaseConEstado[] }[];
 }
 
 @Injectable()
@@ -233,47 +227,14 @@ export class EstudianteService {
     return nivelesAprobados.length > 0 ? Math.max(...nivelesAprobados) + 1 : 1;
   }
 
-  // ---------- Catálogo de asignaturas disponibles por período ----------
+  // ---------- Períodos académicos habilitados (para elegir al matricular) ----------
   //
-  // No existe (todavía) una tabla de "oferta de clases por período": la
-  // disponibilidad de una clase depende solo de prerrequisitos/historial del
-  // estudiante, igual que en obtenerMalla. Lo que aporta el período aquí es
-  // que el catálogo queda amarrado a uno válido y habilitado por el admin
-  // (en vez de mostrarse suelto), no que cambie el conjunto de clases.
+  // El estudiante ve y selecciona las clases (obtenerMalla) sin necesidad de
+  // elegir período primero: el período solo importa en el momento de
+  // matricular (inscribir), no para navegar/seleccionar clases.
 
   async obtenerPeriodosDisponibles(): Promise<PeriodoView[]> {
     return this.periodoService.listarHabilitados();
-  }
-
-  async obtenerCatalogoDisponible(
-    userId: string,
-    periodoId: string,
-    currentUser: RequestUser,
-  ): Promise<CatalogoDisponible> {
-    await this.obtenerEstudianteOFallar(userId);
-    if (!periodoId) {
-      throw new BadRequestException('Debes indicar un período académico (periodoId).');
-    }
-    const periodo = await this.prisma.periodo.findUnique({ where: { idperiodo: periodoId } });
-    if (!periodo || periodo.estado !== EstadoPeriodo.HABILITADO) {
-      throw new BadRequestException('El período indicado no existe o no está habilitado para consulta.');
-    }
-
-    const plantillaId = await this.obtenerPlantillaAsignada(userId);
-    if (!plantillaId) {
-      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
-    }
-
-    const malla = await this.construirMallaConEstado(plantillaId, userId, currentUser);
-    const niveles = malla.niveles
-      .map((n) => ({ nivel: n.nivel, clases: n.clases.filter((c) => c.estadoEstudiante === 'DISPONIBLE') }))
-      .filter((n) => n.clases.length > 0);
-
-    return {
-      periodo: { id: periodo.idperiodo, anno: periodo.anno ?? '', periodo: periodo.periodo ?? '' },
-      plantilla: malla.plantilla,
-      niveles,
-    };
   }
 
   // ---------- Pensum (solo lectura + autorreporte de clases cursadas) ----------
@@ -407,6 +368,7 @@ export class EstudianteService {
           nota: detalle?.nota !== undefined ? String(detalle.nota) : null,
           estado: EstadoHistorial.APROBADA,
           origen: OrigenHistorial.AUTOREPORTE,
+          createdAt: new Date(),
         },
       });
     }
@@ -481,6 +443,7 @@ export class EstudianteService {
         estado: dto.estado,
         nota,
         origen: OrigenHistorial.ADMIN,
+        createdAt: new Date(),
       },
     });
   }
@@ -495,10 +458,18 @@ export class EstudianteService {
     await this.prisma.historialAcademico.delete({ where: { idHistorialAcademico: historialId } });
   }
 
-  // ---------- Inscripción a clases del período actual ----------
+  // ---------- Inscripción (simulación de matrícula) a clases de un período ----------
 
-  async inscribir(userId: string, claseIds: string[], currentUser: RequestUser) {
+  async inscribir(userId: string, claseIds: string[], periodoId: string, currentUser: RequestUser) {
     await this.obtenerEstudianteOFallar(userId);
+    // HU-03-04 (AC2/AC3): la simulación queda asociada al período que el
+    // estudiante seleccionó justo antes de matricular (no a uno calculado
+    // por el servidor a partir de la fecha actual). Se revalida aquí mismo
+    // (existe + habilitado) por si el período cambió de estado entre que el
+    // estudiante lo eligió y este clic.
+    const periodo = await this.obtenerPeriodoHabilitadoOFallar(periodoId, userId);
+    const idperiodo = periodo.idperiodo;
+
     const plantillaId = await this.obtenerPlantillaAsignada(userId);
     if (!plantillaId) {
       throw new BadRequestException('No tienes una plantilla de malla curricular asignada.');
@@ -518,9 +489,11 @@ export class EstudianteService {
       malla.niveles.flatMap((n) => n.clases).map((c) => [c.id, c] as const),
     );
 
-    const periodo = periodoActual();
+    // Una clase ya inscrita en CUALQUIER período bloquea volver a inscribirla
+    // en otro: la matrícula de una clase es única para el estudiante hasta
+    // que cancele esa inscripción (DELETE), no una por período.
     const yaInscritas = await this.prisma.inscripcion.findMany({
-      where: { idUser: userId, periodo },
+      where: { idUser: userId },
       include: { plantillaMallaClase: { include: { clase: true } } },
     });
     const yaInscritasCodigos = new Set(yaInscritas.map((i) => i.plantillaMallaClase.clase.codigo));
@@ -560,14 +533,16 @@ export class EstudianteService {
     // SQL Server no soporta `skipDuplicates` en createMany (a diferencia de
     // Postgres); las validaciones de arriba ya impiden duplicados en el
     // camino normal, así que solo absorbemos un posible choque de
-    // concurrencia (doble submit) contra el índice único (idUser, idPlantillaMalla_has_Clase, periodo).
+    // concurrencia (doble submit) contra el índice único (idUser, idPlantillaMalla_has_Clase, idperiodo).
     try {
+      const ahora = new Date();
       await this.prisma.inscripcion.createMany({
         data: clases.map((c) => ({
           idInscripcion: randomUUID(),
           idUser: userId,
           idPlantillaMalla_has_Clase: c.idPlantillaMalla_has_Clase,
-          periodo,
+          idperiodo,
+          createdAt: ahora,
         })),
       });
     } catch (error) {
@@ -576,19 +551,24 @@ export class EstudianteService {
       }
     }
 
-    return this.listarInscripciones(userId, periodo);
+    return this.listarInscripciones(userId);
   }
 
-  async listarInscripciones(userId: string, periodo: string = periodoActual()) {
+  // Todas las inscripciones vigentes del estudiante, sin importar en qué
+  // período se hicieron: una clase inscrita bloquea volver a inscribirla en
+  // otro período (ver inscribir), así que "mis inscripciones" es una sola
+  // lista global, no una vista por período.
+  async listarInscripciones(userId: string) {
     await this.obtenerEstudianteOFallar(userId);
     const inscripciones = await this.prisma.inscripcion.findMany({
-      where: { idUser: userId, periodo },
-      include: { plantillaMallaClase: { include: { clase: true, posicion: true } } },
+      where: { idUser: userId },
+      include: { plantillaMallaClase: { include: { clase: true, posicion: true } }, periodo: true },
       orderBy: { createdAt: 'asc' },
     });
     return inscripciones.map((i) => ({
       id: i.idInscripcion,
-      periodo: i.periodo,
+      periodoId: i.idperiodo,
+      periodo: `${i.periodo.anno}-${i.periodo.periodo}`,
       clase: {
         id: i.plantillaMallaClase.idPlantillaMalla_has_Clase,
         codigo: i.plantillaMallaClase.clase.codigo,
@@ -649,5 +629,43 @@ export class EstudianteService {
   private async resolverIdPeriodoActual(): Promise<string> {
     const { anno, periodo } = semestreActual();
     return this.resolverIdPeriodo(anno, periodo);
+  }
+
+  // HU-03-04 (AC1/AC3): punto único de validación para "iniciar una
+  // simulación sobre un período" (catálogo e inscripción): exige un
+  // periodoId, y que ese período exista y esté HABILITADO en este momento
+  // (no en el momento en que el estudiante lo vio por primera vez) — así,
+  // si el admin lo deshabilita mientras el estudiante está en el catálogo,
+  // la siguiente acción (recargar catálogo o intentar matricular) lo
+  // bloquea con un mensaje claro en vez de dejarlo pasar silenciosamente.
+  // Todo rechazo queda auditado (AC3: "cualquier intento de acceso a un
+  // período no habilitado") en la misma tabla Auditoria que ya usa el admin
+  // para los cambios de estado (ver PeriodoService.cambiarEstado), con
+  // campo='acceso_denegado' para distinguirlo de un cambio de valor real.
+  private async obtenerPeriodoHabilitadoOFallar(periodoId: string, userId: string) {
+    if (!periodoId) {
+      throw new BadRequestException('Debes indicar un período académico (periodoId).');
+    }
+    const periodo = await this.prisma.periodo.findUnique({ where: { idperiodo: periodoId } });
+    if (!periodo || periodo.estado !== EstadoPeriodo.HABILITADO) {
+      await this.prisma.auditoria.create({
+        data: {
+          idAuditoria: randomUUID(),
+          entidad: 'periodo',
+          // idEntidad es VARCHAR(45) en BD: se trunca (en vez de dejar que
+          // SQL Server rechace el INSERT) porque periodoId viene del cliente
+          // sin límite de longitud, y no queremos que un intento de acceso
+          // "raro" tumbe el propio registro de auditoría con un 500.
+          idEntidad: periodoId.slice(0, 45),
+          campo: 'acceso_denegado',
+          valorAnterior: null,
+          valorNuevo: periodo?.estado ?? 'INEXISTENTE',
+          idUser: userId,
+          createdAt: new Date(),
+        },
+      });
+      throw new BadRequestException('El período indicado no existe o ya no está habilitado.');
+    }
+    return periodo;
   }
 }

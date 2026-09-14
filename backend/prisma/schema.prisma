@@ -184,6 +184,7 @@ model Periodo {
   updatedAt   DateTime?
 
   historialAcademico HistorialAcademico[]
+  inscripciones      Inscripcion[]
 
   @@unique([anno, periodo], map: "UQ_periodo_anno_periodo")
   @@map("periodo")
@@ -213,17 +214,21 @@ model Auditoria {
 // migrations/proposed/2026-08-30_inscripcion.sql). El esquema real no trae
 // ninguna tabla para "clases inscritas en el período actual"; esta la
 // recrea con la misma forma que tenía el schema anterior.
+// ACTUALIZACIÓN (2026-09-12): usa idperiodo -> catálogo Periodo (igual que
+// HistorialAcademico) en vez de guardar "periodo" como texto libre sin
+// validar contra ningún catálogo ni estado habilitado/deshabilitado.
 model Inscripcion {
   idInscripcion               String    @id(map: "PK_Inscripcion") @db.VarChar(45)
   idUser                      String    @db.VarChar(45)
   idPlantillaMalla_has_Clase  String    @db.VarChar(45)
-  periodo                     String?   @db.VarChar(45)
+  idperiodo                   String    @db.VarChar(45)
   createdAt                   DateTime?
 
   user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Inscripcion_User1")
   plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Inscripcion_PlantillaMalla_has_Clase1")
+  periodo              Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_Inscripcion_periodo1")
 
-  @@unique([idUser, idPlantillaMalla_has_Clase, periodo], map: "UQ_Inscripcion_User_Clase_Periodo")
+  @@unique([idUser, idPlantillaMalla_has_Clase, idperiodo], map: "UQ_Inscripcion_User_Clase_Periodo")
 }
 
 model Session {

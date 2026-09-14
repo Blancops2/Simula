@@ -857,6 +857,11 @@ select:focus {
   opacity: 0.75;
 }
 
+.tree-node-otro-periodo {
+  border-top-color: var(--color-border-strong);
+  opacity: 0.75;
+}
+
 .tree-node-title {
   display: flex;
   align-items: center;

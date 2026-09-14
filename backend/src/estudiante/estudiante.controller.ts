@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '../common/enums';
 import { CurrentUser, RequestUser } from '../auth/decorators/current-user.decorator';
@@ -47,15 +47,6 @@ export class EstudianteController {
     return this.estudiante.obtenerPeriodosDisponibles();
   }
 
-  @Get('catalogo')
-  @ApiOperation({
-    summary:
-      'Catálogo de asignaturas disponibles para cursar en el período indicado (debe estar habilitado).',
-  })
-  catalogo(@CurrentUser() user: RequestUser, @Query('periodoId') periodoId: string) {
-    return this.estudiante.obtenerCatalogoDisponible(user.userId, periodoId, user);
-  }
-
   @Get('historial')
   @ApiOperation({ summary: 'Historial de clases cursadas por el estudiante autenticado.' })
   historial(@CurrentUser() user: RequestUser) {
@@ -94,14 +85,14 @@ export class EstudianteController {
   @Post('inscripciones')
   @ApiOperation({
     summary:
-      'Inscribe un lote de clases disponibles para el período actual, validando en el servidor prerrequisitos y correquisitos.',
+      'Inscribe un lote de clases en el período académico indicado (debe estar habilitado), validando en el servidor prerrequisitos y correquisitos.',
   })
   inscribir(@CurrentUser() user: RequestUser, @Body() dto: InscribirClasesDto) {
-    return this.estudiante.inscribir(user.userId, dto.claseIds, user);
+    return this.estudiante.inscribir(user.userId, dto.claseIds, dto.periodoId, user);
   }
 
   @Get('inscripciones')
-  @ApiOperation({ summary: 'Lista las inscripciones del estudiante para el período académico actual.' })
+  @ApiOperation({ summary: 'Lista todas las inscripciones vigentes del estudiante, en cualquier período.' })
   listarInscripciones(@CurrentUser() user: RequestUser) {
     return this.estudiante.listarInscripciones(user.userId);
   }

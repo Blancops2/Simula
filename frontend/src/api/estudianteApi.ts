@@ -1,5 +1,4 @@
 import type {
-  CatalogoDisponible,
   HistorialItem,
   InscripcionItem,
   MallaConEstado,
@@ -33,11 +32,6 @@ export async function getPeriodosDisponibles(): Promise<PeriodoDisponible[]> {
   return data;
 }
 
-export async function getCatalogo(periodoId: string): Promise<CatalogoDisponible> {
-  const { data } = await httpClient.get<CatalogoDisponible>('/estudiante/catalogo', { params: { periodoId } });
-  return data;
-}
-
 export async function getHistorial(): Promise<HistorialItem[]> {
   const { data } = await httpClient.get<HistorialItem[]>('/estudiante/historial');
   return data;
@@ -48,8 +42,8 @@ export async function getInscripciones(): Promise<InscripcionItem[]> {
   return data;
 }
 
-export async function inscribirClases(claseIds: string[]): Promise<InscripcionItem[]> {
-  const { data } = await httpClient.post<InscripcionItem[]>('/estudiante/inscripciones', { claseIds });
+export async function inscribirClases(periodoId: string, claseIds: string[]): Promise<InscripcionItem[]> {
+  const { data } = await httpClient.post<InscripcionItem[]>('/estudiante/inscripciones', { periodoId, claseIds });
   return data;
 }
 
