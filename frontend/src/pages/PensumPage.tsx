@@ -1,13 +1,13 @@
 import { Background, Controls, MarkerType, MiniMap, ReactFlow, useEdgesState, useNodesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { desmarcarClaseCursada, getPensum, marcarClaseCursada, type DetalleClaseCursada } from '../api/estudianteApi';
+import { desmarcarClaseEnCurso, getHistorial, getPensum, marcarClaseEnCurso } from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
 import { HistorialClaseModal } from '../components/curriculum/HistorialClaseModal';
 import { PensumClaseNode, type PensumClaseNodeType } from '../components/curriculum/PensumClaseNode';
 import { RequisitoEdge, type RequisitoEdgeType } from '../components/curriculum/RequisitoEdge';
 import { posicionDeClase } from '../curriculum/layout';
-import type { ClasePensum, PensumArbol } from '../estudiante/types';
+import type { ClasePensum, HistorialItem, PensumArbol } from '../estudiante/types';
 
 const nodeTypes = { clase: PensumClaseNode };
 const edgeTypes = { requisito: RequisitoEdge };
@@ -18,19 +18,27 @@ function errorMessage(err: unknown, fallback: string): string {
 
 export function PensumPage() {
   const [arbol, setArbol] = useState<PensumArbol | null>(null);
+  const [historial, setHistorial] = useState<HistorialItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [procesandoId, setProcesandoId] = useState<string | null>(null);
-  const [editingClaseId, setEditingClaseId] = useState<string | null>(null);
+  const [verHistorialClaseId, setVerHistorialClaseId] = useState<string | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<PensumClaseNodeType>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RequisitoEdgeType>([]);
 
+  // No pone `loading` en true aquí: ese estado solo controla la pantalla
+  // "Cargando…" del primer render (ver el efecto de montaje, abajo). Si lo
+  // hiciera también en cada refresco tras marcar/desmarcar "en curso",
+  // `loading` volvería a true, se desmontaría el lienzo de React Flow por
+  // completo y el estudiante perdería el pan/zoom donde estaba — el efecto
+  // de "se refresca y me mueve" que se quería evitar.
   const cargar = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
-      setArbol(await getPensum());
+      const [arbolData, historialData] = await Promise.all([getPensum(), getHistorial()]);
+      setArbol(arbolData);
+      setHistorial(historialData);
     } catch (err) {
       setError(errorMessage(err, 'No se pudo cargar tu pensum.'));
     } finally {
@@ -39,58 +47,53 @@ export function PensumPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     cargar();
   }, [cargar]);
 
   const todasLasClases: ClasePensum[] = useMemo(() => arbol?.niveles.flatMap((n) => n.clases) ?? [], [arbol]);
-  const editingClase = useMemo(
-    () => todasLasClases.find((c) => c.id === editingClaseId) ?? null,
-    [todasLasClases, editingClaseId],
+  const claseSeleccionada = useMemo(
+    () => todasLasClases.find((c) => c.id === verHistorialClaseId) ?? null,
+    [todasLasClases, verHistorialClaseId],
+  );
+  const historialClaseSeleccionada = useMemo(
+    () => (claseSeleccionada ? historial.filter((h) => h.clase.codigo === claseSeleccionada.codigo) : []),
+    [historial, claseSeleccionada],
   );
 
-  const handleGuardarDetalle = useCallback(
-    async (detalle: DetalleClaseCursada) => {
-      if (!editingClaseId) return;
-      await marcarClaseCursada(editingClaseId, detalle);
-      setEditingClaseId(null);
-      await cargar();
-    },
-    [editingClaseId, cargar],
-  );
+  // Mismo criterio que el backend (construirMallaConEstado/inscribir): una
+  // clase solo se puede marcar "en curso" si todos sus prerrequisitos ya
+  // están aprobados. Se calcula aquí (no solo en el backend) para que el
+  // checkbox ya aparezca deshabilitado antes de intentarlo.
+  const cursadaPorId = useMemo(() => new Map(todasLasClases.map((c) => [c.id, c.cursada])), [todasLasClases]);
 
-  const onToggle = useCallback(async (claseId: string, marcar: boolean) => {
-    setProcesandoId(claseId);
-    setError(null);
-    try {
-      if (marcar) {
-        await marcarClaseCursada(claseId);
-      } else {
-        await desmarcarClaseCursada(claseId);
+  // Único autorreporte que sigue existiendo desde el Pensum: "estoy cursando
+  // esto ahora" (gris). Aprobada/reprobada, con su nota, ya no se edita
+  // desde aquí — se sube por CSV o la carga el administrador.
+  const onToggle = useCallback(
+    async (claseId: string, marcar: boolean) => {
+      setProcesandoId(claseId);
+      setError(null);
+      try {
+        if (marcar) {
+          await marcarClaseEnCurso(claseId);
+        } else {
+          await desmarcarClaseEnCurso(claseId);
+        }
+        await cargar();
+      } catch (err) {
+        setError(errorMessage(err, 'No se pudo actualizar la clase.'));
+      } finally {
+        setProcesandoId(null);
       }
-      setArbol((prev) =>
-        prev
-          ? {
-              ...prev,
-              niveles: prev.niveles.map((n) => ({
-                ...n,
-                clases: n.clases.map((c) =>
-                  c.id === claseId ? { ...c, cursada: marcar, autorreportada: marcar } : c,
-                ),
-              })),
-            }
-          : prev,
-      );
-    } catch (err) {
-      setError(errorMessage(err, 'No se pudo actualizar la clase.'));
-    } finally {
-      setProcesandoId(null);
-    }
-  }, []);
+    },
+    [cargar],
+  );
 
   // Reconstruye los nodos cada vez que cambia el árbol o el estado de
   // "procesando" (para deshabilitar el checkbox de la clase en vuelo). Los
   // nodos no son arrastrables: esta vista es de solo lectura salvo el
-  // checkbox de autorreporte.
+  // checkbox de "en curso".
   useEffect(() => {
     if (!arbol) return;
     const indicePorNivel = new Map<number, number>();
@@ -106,11 +109,16 @@ export function PensumPage() {
         // nodo cuando no es seleccionable ni arrastrable y no tiene handlers
         // de click/hover, lo que también bloquea el checkbox de adentro.
         draggable: false,
-        data: { clase, procesando: procesandoId === clase.id, onToggle },
+        data: {
+          clase,
+          procesando: procesandoId === clase.id,
+          prerrequisitosCumplidos: clase.prerrequisitos.every((r) => cursadaPorId.get(r.claseId) === true),
+          onToggle,
+        },
       };
     });
     setNodes(nuevosNodos);
-  }, [arbol, todasLasClases, procesandoId, onToggle, setNodes]);
+  }, [arbol, todasLasClases, procesandoId, cursadaPorId, onToggle, setNodes]);
 
   useEffect(() => {
     if (!arbol) return;
@@ -162,11 +170,10 @@ export function PensumPage() {
     <AppShell title={titulo} backTo="/estudiante" backLabel="Mi perfil">
       {error && <p className="page-error">{error}</p>}
       <p className="flow-legend">
-        Este es tu plan de estudio completo, igual al que arma el administrador. Marca “Ya la cursé” en las
-        clases que ya completaste: se pintarán de verde, contarán en tu avance académico y habilitarán las
-        clases que las tengan como prerrequisito, igual que si quedaran aprobadas en tu historial. Las clases
-        que ya tienes registradas oficialmente por el administrador aparecen marcadas y no se pueden desmarcar
-        desde aquí.
+        Este es tu plan de estudio completo, igual al que arma el administrador. Las clases en verde ya están
+        aprobadas en tu historial (subido por CSV o cargado por el administrador); las clases en gris las marcaste
+        como "en curso". Haz clic en cualquier clase para ver su historial completo — no se puede editar desde
+        aquí.
       </p>
 
       {todasLasClases.length === 0 ? (
@@ -180,7 +187,7 @@ export function PensumPage() {
             edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => setEditingClaseId(node.id)}
+            onNodeClick={(_, node) => setVerHistorialClaseId(node.id)}
             nodesDraggable={false}
             nodesConnectable={false}
             edgesFocusable={false}
@@ -195,12 +202,12 @@ export function PensumPage() {
         </div>
       )}
 
-      {editingClase && (
+      {claseSeleccionada && (
         <HistorialClaseModal
-          key={editingClase.id}
-          clase={editingClase}
-          onClose={() => setEditingClaseId(null)}
-          onSave={handleGuardarDetalle}
+          key={claseSeleccionada.id}
+          clase={claseSeleccionada}
+          historial={historialClaseSeleccionada}
+          onClose={() => setVerHistorialClaseId(null)}
         />
       )}
     </AppShell>

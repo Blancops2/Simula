@@ -17,9 +17,14 @@ import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
 import { PlanEstudioService } from '../plan-estudio/plan-estudio.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
-import { RegistrarDetalleClaseDto } from './dto/registrar-detalle-clase.dto';
+import { ModeloPredictivoService } from './modelo-predictivo.service';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
 import { semestreActual } from './periodo.util';
+
+// Umbral (escala 0-100) que usa importarHistorialCsv para derivar
+// APROBADA/REPROBADA a partir de la nota, en vez de pedirle ese dato al
+// estudiante en el CSV (decisión de negocio, no viene de ninguna tabla).
+const NOTA_MINIMA_APROBACION = 65;
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -42,6 +47,7 @@ export interface AvanceAcademico {
 
 export interface ClasePensum extends ClaseView {
   cursada: boolean;
+  enCurso: boolean;
   oficial: boolean;
   autorreportada: boolean;
   periodo: string | null;
@@ -54,6 +60,26 @@ export interface PensumArbol {
   niveles: { nivel: number; clases: ClasePensum[] }[];
 }
 
+export type PlanEstudioPeriodoConEstado = { id: string; anno: string; periodo: string; clases: ClaseConEstado[] };
+
+export interface ResultadoImportacionHistorial {
+  totalFilas: number;
+  registrados: number;
+  omitidos: number;
+  errores: string[];
+}
+
+export interface RecomendacionClases {
+  disponible: boolean;
+  fuente: 'MODELO_EXTERNO' | 'FALLBACK_LOCAL' | null;
+  clases: ClaseConEstado[];
+}
+
+export interface RecomendacionPeriodo {
+  periodo: PlanEstudioPeriodoConEstado | null;
+  completado: boolean;
+}
+
 @Injectable()
 export class EstudianteService {
   constructor(
@@ -61,6 +87,7 @@ export class EstudianteService {
     private readonly curriculum: CurriculumService,
     private readonly periodoService: PeriodoService,
     private readonly planEstudioService: PlanEstudioService,
+    private readonly modeloPredictivo: ModeloPredictivoService,
   ) {}
 
   // ---------- Perfil ----------
@@ -136,16 +163,24 @@ export class EstudianteService {
   // admin para la malla asignada, con cada clase cruzada con el historial
   // del estudiante (aprobada/en curso/disponible/bloqueada) igual que
   // obtenerMalla, para poder resaltar lo ya cursado.
-  async obtenerPlanEstudio(
-    userId: string,
-    currentUser: RequestUser,
-  ): Promise<{ id: string; anno: string; periodo: string; clases: ClaseConEstado[] }[]> {
+  async obtenerPlanEstudio(userId: string, currentUser: RequestUser): Promise<PlanEstudioPeriodoConEstado[]> {
     await this.obtenerEstudianteOFallar(userId);
     const plantillaId = await this.obtenerPlantillaAsignada(userId);
     if (!plantillaId) {
       throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
     }
+    return this.construirPlanEstudioConEstado(plantillaId, userId, currentUser);
+  }
 
+  // Compartido entre obtenerPlanEstudio (HU visible hoy) y
+  // obtenerRecomendacionPeriodo (HU-04-01): los periodos de plan_estudio de
+  // la malla asignada, cada uno con sus clases cruzadas con el historial del
+  // estudiante (mismo estado que usa la malla/catálogo).
+  private async construirPlanEstudioConEstado(
+    plantillaId: string,
+    userId: string,
+    currentUser: RequestUser,
+  ): Promise<PlanEstudioPeriodoConEstado[]> {
     const [malla, periodos] = await Promise.all([
       this.construirMallaConEstado(plantillaId, userId, currentUser),
       this.planEstudioService.listarPorPlantilla(plantillaId),
@@ -159,6 +194,81 @@ export class EstudianteService {
       periodo: p.periodo,
       clases: p.clasesIds.map((id) => clasesPorId.get(id)).filter((c): c is ClaseConEstado => !!c),
     }));
+  }
+
+  // ---------- Recomendaciones (HU-04-01) ----------
+
+  // Recomendación 1: clases sugeridas por un modelo predictivo externo (fuera
+  // de nuestro alcance). Si no hay modelo configurado, el adaptador usa un
+  // fallback local basado en el nivel sugerido; si el modelo está
+  // configurado pero falla, se reporta `disponible: false` en vez de
+  // disfrazar el fallback como una recomendación real.
+  async obtenerRecomendacionClases(userId: string, currentUser: RequestUser): Promise<RecomendacionClases> {
+    const user = await this.obtenerEstudianteOFallar(userId);
+    const plantillaId = await this.obtenerPlantillaAsignada(userId);
+    if (!plantillaId) {
+      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
+    }
+
+    const malla = await this.construirMallaConEstado(plantillaId, userId, currentUser);
+    const todasLasClases = malla.niveles.flatMap((n) => n.clases);
+    const nivelSugerido = this.calcularSemestreSugerido(malla);
+    const codigosAprobados = todasLasClases
+      .filter((c) => c.estadoEstudiante === 'APROBADA')
+      .map((c) => c.codigo);
+
+    const resultado = await this.modeloPredictivo.obtenerCodigosRecomendados(
+      { codigoEstudiantil: user.codigoInstitucional, codigosAprobados, nivelSugerido },
+      () =>
+        todasLasClases
+          .filter((c) => c.estadoEstudiante === 'DISPONIBLE' && c.nivel === nivelSugerido)
+          .map((c) => c.codigo),
+    );
+
+    if (!resultado) {
+      return { disponible: false, fuente: null, clases: [] };
+    }
+
+    const codigosRecomendados = new Set(resultado.codigos);
+    const clases = todasLasClases.filter(
+      (c) => c.estadoEstudiante === 'DISPONIBLE' && codigosRecomendados.has(c.codigo),
+    );
+    return { disponible: true, fuente: resultado.fuente, clases };
+  }
+
+  // Recomendación 2: el periodo de plan_estudio (secuencia recomendada de la
+  // malla, ver DDL.sql) cuyas clases el estudiante tiene más avanzadas sin
+  // haberlo completado todavía. La elección es SECUENCIAL, no por mayor
+  // ratio global: se recorre en el orden ya establecido (mismo orden que
+  // PlanEstudioService.listarPorPlantilla) y se devuelve el PRIMER periodo
+  // que no esté 100% aprobado. No se compara el ratio entre periodos
+  // distintos para elegir cuál recomendar — un periodo posterior con más
+  // clases aprobadas en términos relativos (p. ej. por tener menos clases en
+  // total) no puede "adelantarse" a un periodo anterior todavía incompleto.
+  // Si todos los periodos con clases están 100% aprobados, se reporta el
+  // último como "sugerido" y `completado: true`.
+  async obtenerRecomendacionPeriodo(userId: string, currentUser: RequestUser): Promise<RecomendacionPeriodo> {
+    await this.obtenerEstudianteOFallar(userId);
+    const plantillaId = await this.obtenerPlantillaAsignada(userId);
+    if (!plantillaId) {
+      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
+    }
+
+    const periodos = (await this.construirPlanEstudioConEstado(plantillaId, userId, currentUser)).filter(
+      (p) => p.clases.length > 0,
+    );
+    if (periodos.length === 0) {
+      return { periodo: null, completado: true };
+    }
+
+    for (const p of periodos) {
+      const aprobadas = p.clases.filter((c) => c.estadoEstudiante === 'APROBADA').length;
+      if (aprobadas < p.clases.length) {
+        return { periodo: p, completado: false };
+      }
+    }
+
+    return { periodo: periodos[periodos.length - 1], completado: true };
   }
 
   private async construirMallaConEstado(
@@ -269,14 +379,15 @@ export class EstudianteService {
     return this.periodoService.listarHabilitados();
   }
 
-  // ---------- Pensum (solo lectura + autorreporte de clases cursadas) ----------
+  // ---------- Pensum (solo lectura, salvo el autorreporte de "en curso") ----------
   //
-  // El autorreporte escribe directamente en el historial académico oficial
-  // (con origen AUTOREPORTE, estado APROBADA): cuenta igual que un registro
-  // de administrador para el avance académico y para habilitar los
-  // prerrequisitos de inscripción. Lo único que lo distingue es que el
-  // propio estudiante puede desmarcarlo (borrar su fila AUTOREPORTE); nunca
-  // puede tocar un registro de origen ADMIN desde el pensum.
+  // El Pensum es una vista puramente visual del avance del estudiante: el
+  // historial en sí (aprobada/reprobada, con nota) ya no se edita desde
+  // aquí, se sube por CSV (ver importarHistorialCsv) o lo carga el
+  // administrador. Lo único que el estudiante sigue pudiendo autorreportar
+  // desde el Pensum es "estoy cursando esto ahora" (EN_CURSO), porque el CSV
+  // no acepta ese estado (no tiene nota final todavía) — ver
+  // marcarClaseEnCurso/desmarcarClaseEnCurso más abajo.
 
   async obtenerPensum(userId: string, currentUser: RequestUser): Promise<PensumArbol> {
     await this.obtenerEstudianteOFallar(userId);
@@ -291,37 +402,46 @@ export class EstudianteService {
 
     // Igual que en la malla con estado, el cruce es por CÓDIGO de clase (no
     // por id), para que siga contando tras un cambio de versión de plantilla.
-    const historialAprobado = await this.prisma.historialAcademico.findMany({
-      where: { idUser: userId, estado: EstadoHistorial.APROBADA },
+    // Se trae TODO el historial (no solo APROBADA) porque ahora también hay
+    // que resolver el color "en curso" (gris) a partir del mismo dataset.
+    const historialTodo = await this.prisma.historialAcademico.findMany({
+      where: { idUser: userId },
       include: { plantillaMallaClase: { include: { clase: true } }, periodo: true },
     });
 
-    const historialPorCodigo = new Map<
-      string,
-      { origen: OrigenHistorial; periodo: string | null; anno: string | null; nota: string | null }
-    >();
-    for (const h of historialAprobado) {
+    type DetalleHistorial = { origen: OrigenHistorial; periodo: string | null; anno: string | null; nota: string | null };
+    const aprobadaPorCodigo = new Map<string, DetalleHistorial>();
+    const enCursoPorCodigo = new Map<string, DetalleHistorial>();
+    for (const h of historialTodo) {
       const codigo = h.plantillaMallaClase.clase.codigo;
       if (!codigo) continue;
+      const detalle: DetalleHistorial = {
+        origen: (h.origen as OrigenHistorial) ?? OrigenHistorial.ADMIN,
+        periodo: h.periodo.periodo,
+        anno: h.periodo.anno,
+        nota: h.nota,
+      };
       // Si ya hay un registro ADMIN para ese código, prevalece sobre uno
-      // AUTOREPORTE: una aprobación oficial nunca queda "editable".
-      if (historialPorCodigo.get(codigo)?.origen !== OrigenHistorial.ADMIN) {
-        historialPorCodigo.set(codigo, {
-          origen: (h.origen as OrigenHistorial) ?? OrigenHistorial.ADMIN,
-          periodo: h.periodo.periodo,
-          anno: h.periodo.anno,
-          nota: h.nota,
-        });
+      // AUTOREPORTE: una aprobación (o un "en curso") oficial nunca queda
+      // "editable".
+      const mapa = h.estado === EstadoHistorial.APROBADA ? aprobadaPorCodigo : h.estado === EstadoHistorial.EN_CURSO ? enCursoPorCodigo : null;
+      if (mapa && mapa.get(codigo)?.origen !== OrigenHistorial.ADMIN) {
+        mapa.set(codigo, detalle);
       }
     }
 
     const niveles = arbol.niveles.map((nivel) => ({
       nivel: nivel.nivel,
       clases: nivel.clases.map((clase): ClasePensum => {
-        const detalle = historialPorCodigo.get(clase.codigo);
+        const aprobada = aprobadaPorCodigo.get(clase.codigo);
+        // Una clase APROBADA nunca se muestra también como "en curso",
+        // aunque exista una fila EN_CURSO vieja de un intento anterior.
+        const enCurso = aprobada ? undefined : enCursoPorCodigo.get(clase.codigo);
+        const detalle = aprobada ?? enCurso;
         return {
           ...clase,
-          cursada: detalle !== undefined,
+          cursada: aprobada !== undefined,
+          enCurso: enCurso !== undefined,
           oficial: detalle?.origen === OrigenHistorial.ADMIN,
           autorreportada: detalle?.origen === OrigenHistorial.AUTOREPORTE,
           periodo: detalle?.periodo ?? null,
@@ -343,75 +463,83 @@ export class EstudianteService {
     };
   }
 
-  async marcarClaseCursada(userId: string, claseId: string, detalle?: RegistrarDetalleClaseDto) {
+  // Autorreporte de "estoy cursando esto ahora mismo", siempre sobre el
+  // período vigente según la fecha del servidor — no se pide período ni
+  // nota (una clase en curso no tiene nota final todavía). La clave de
+  // existencia es clase + período VIGENTE (no "cualquier fila AUTOREPORTE
+  // de esta clase"): a diferencia del diseño anterior, ahora una misma
+  // clase puede tener varias filas AUTOREPORTE en distintos períodos
+  // (cargadas por importarHistorialCsv, ej. reprobada en 2023-1), y no hay
+  // que tocarlas al marcar/desmarcar el período actual como en curso.
+  async marcarClaseEnCurso(userId: string, claseId: string, currentUser: RequestUser) {
     await this.obtenerEstudianteOFallar(userId);
     const plantillaId = await this.obtenerPlantillaAsignada(userId);
-
-    const pmc = await this.prisma.plantillaMalla_has_Clase.findUnique({
-      where: { idPlantillaMalla_has_Clase: claseId },
-    });
-    if (!pmc || pmc.idPlantillaMalla !== plantillaId) {
-      throw new NotFoundException('La clase indicada no pertenece a tu malla curricular.');
+    if (!plantillaId) {
+      throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
     }
 
-    // Un solo registro de autorreporte por clase (igual que asume
-    // desmarcarClaseCursada, que borra por origen sin filtrar periodo): así
-    // completar el modal de detalle después de tildar el checkbox actualiza
-    // la misma fila en vez de crear una duplicada.
-    const admin = await this.prisma.historialAcademico.findFirst({
-      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.ADMIN },
+    // Mismo criterio que usa inscribir() para bloquear la matrícula: no se
+    // puede autorreportar "en curso" una clase ya aprobada, ni una cuyos
+    // prerrequisitos todavía no están aprobados (sería un dato falso — no
+    // se puede estar cursando una clase que no se puede matricular).
+    const malla = await this.construirMallaConEstado(plantillaId, userId, currentUser);
+    const estado = malla.niveles.flatMap((n) => n.clases).find((c) => c.id === claseId);
+    if (!estado) {
+      throw new NotFoundException('La clase indicada no pertenece a tu malla curricular.');
+    }
+    if (estado.estadoEstudiante === 'APROBADA') {
+      throw new BadRequestException('Ya aprobaste esta clase; no se puede marcar como en curso.');
+    }
+    if (estado.estadoEstudiante === 'BLOQUEADA') {
+      const faltantes = estado.prerrequisitosFaltantes.map((r) => r.codigo).join(', ');
+      throw new BadRequestException(`No puedes marcarla como en curso: te faltan prerrequisitos (${faltantes}).`);
+    }
+
+    const idperiodo = await this.resolverIdPeriodoActual();
+
+    const existente = await this.prisma.historialAcademico.findFirst({
+      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, idperiodo },
     });
-    if (admin) {
-      // Ya hay un registro oficial de administrador para esta clase: no se
-      // sobrescribe desde el autorreporte.
+    if (existente && (existente.origen === OrigenHistorial.ADMIN || existente.estado !== EstadoHistorial.EN_CURSO)) {
+      // Ya hay, para el período vigente, un registro oficial de
+      // administrador o un resultado final autorreportado (aprobada/
+      // reprobada, ej. importado por CSV): nunca se convierte en "en
+      // curso" por encima de un dato ya asentado.
       return;
     }
 
-    const existente = await this.prisma.historialAcademico.findFirst({
-      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.AUTOREPORTE },
-    });
-
-    // El idperiodo solo se puede resolver del catálogo cuando el detalle
-    // trae ambos datos (año + período); el modal siempre los envía juntos.
-    // Si no vienen, en un CREATE se usa el período vigente según la fecha
-    // del servidor; en un UPDATE sin detalle, el período existente no se
-    // toca (mismo comportamiento que antes con periodo/anno).
-    const idperiodoDetalle =
-      detalle?.periodo !== undefined && detalle?.anno !== undefined
-        ? await this.resolverIdPeriodo(detalle.anno, detalle.periodo)
-        : undefined;
-
     if (existente) {
-      await this.prisma.historialAcademico.update({
-        where: { idHistorialAcademico: existente.idHistorialAcademico },
-        data: {
-          estado: EstadoHistorial.APROBADA,
-          ...(idperiodoDetalle !== undefined && { idperiodo: idperiodoDetalle }),
-          ...(detalle?.nota !== undefined && { nota: String(detalle.nota) }),
-        },
-      });
-    } else {
-      await this.prisma.historialAcademico.create({
-        data: {
-          idHistorialAcademico: randomUUID(),
-          idUser: userId,
-          idPlantillaMalla_has_Clase: claseId,
-          idperiodo: idperiodoDetalle ?? (await this.resolverIdPeriodoActual()),
-          nota: detalle?.nota !== undefined ? String(detalle.nota) : null,
-          estado: EstadoHistorial.APROBADA,
-          origen: OrigenHistorial.AUTOREPORTE,
-          createdAt: new Date(),
-        },
-      });
+      // Ya estaba en EN_CURSO: no hay nada que actualizar (idempotente).
+      return;
     }
+    await this.prisma.historialAcademico.create({
+      data: {
+        idHistorialAcademico: randomUUID(),
+        idUser: userId,
+        idPlantillaMalla_has_Clase: claseId,
+        idperiodo,
+        nota: null,
+        estado: EstadoHistorial.EN_CURSO,
+        origen: OrigenHistorial.AUTOREPORTE,
+        createdAt: new Date(),
+      },
+    });
   }
 
-  async desmarcarClaseCursada(userId: string, claseId: string) {
+  async desmarcarClaseEnCurso(userId: string, claseId: string) {
     await this.obtenerEstudianteOFallar(userId);
-    // deleteMany (no delete) porque puede haber quedado más de una fila
-    // AUTOREPORTE para la misma clase en distintos períodos.
+    const idperiodo = await this.resolverIdPeriodoActual();
+    // Acotado al período vigente Y a estado EN_CURSO (no basta con
+    // origen AUTOREPORTE): así nunca borra, por accidente, una fila
+    // aprobada/reprobada del período actual que haya llegado por CSV.
     await this.prisma.historialAcademico.deleteMany({
-      where: { idUser: userId, idPlantillaMalla_has_Clase: claseId, origen: OrigenHistorial.AUTOREPORTE },
+      where: {
+        idUser: userId,
+        idPlantillaMalla_has_Clase: claseId,
+        idperiodo,
+        origen: OrigenHistorial.AUTOREPORTE,
+        estado: EstadoHistorial.EN_CURSO,
+      },
     });
   }
 
@@ -437,6 +565,197 @@ export class EstudianteService {
         nivel: h.plantillaMallaClase.posicion.nivel,
       },
     }));
+  }
+
+  // Autoservicio de HU-03-03: el estudiante sube su propio historial en lote
+  // en vez de esperar a que el administrador lo capture clase por clase. Se
+  // resuelve por CÓDIGO de clase (no por id interno, que el estudiante no
+  // conoce) contra la plantilla que tiene asignada, y respeta la misma regla
+  // que el resto del módulo: un registro ADMIN nunca se sobrescribe desde
+  // aquí (misma regla que marcarClaseEnCurso más arriba), así que las filas
+  // del CSV que choquen con uno oficial simplemente se cuentan como
+  // "omitidas".
+  // El CSV no trae columna "estado": el estudiante solo aporta la nota y el
+  // estado (APROBADA/REPROBADA) se calcula contra NOTA_MINIMA_APROBACION,
+  // para no pedirle un dato que ya se deduce de la nota y evitar que
+  // escriba un estado inconsistente con ella.
+  //
+  // Todo lo que se necesita para resolver CUALQUIER fila (clases de la
+  // malla, catálogo de períodos, historial ya existente del estudiante) se
+  // trae de una sola vez ANTES del loop y se resuelve en memoria con Maps:
+  // así el costo es fijo (3 consultas de lectura) sin importar cuántas
+  // filas traiga el CSV, en vez de repetir esas mismas consultas por fila.
+  // Las escrituras sí son una por fila (creates/updates distintos), pero
+  // van todas en una sola transacción al final.
+  async importarHistorialCsv(userId: string, archivo?: Express.Multer.File): Promise<ResultadoImportacionHistorial> {
+    await this.obtenerEstudianteOFallar(userId);
+    if (!archivo || !archivo.buffer?.length) {
+      throw new BadRequestException('Debes adjuntar un archivo CSV con tu historial.');
+    }
+    if (!/\.csv$/i.test(archivo.originalname ?? '')) {
+      throw new BadRequestException('El archivo debe tener extensión .csv.');
+    }
+
+    const plantillaId = await this.obtenerPlantillaAsignada(userId);
+    if (!plantillaId) {
+      throw new BadRequestException('No tienes una plantilla de malla curricular asignada.');
+    }
+
+    const [clasesDeLaMalla, periodosCatalogo, historialExistente] = await Promise.all([
+      this.prisma.plantillaMalla_has_Clase.findMany({
+        where: { idPlantillaMalla: plantillaId },
+        include: { clase: true },
+      }),
+      this.prisma.periodo.findMany(),
+      this.prisma.historialAcademico.findMany({ where: { idUser: userId } }),
+    ]);
+
+    const pmcPorCodigo = new Map(
+      clasesDeLaMalla
+        .filter((pmc) => pmc.clase.codigo)
+        .map((pmc) => [pmc.clase.codigo!.trim().toUpperCase(), pmc.idPlantillaMalla_has_Clase] as const),
+    );
+    const idperiodoPorClave = new Map<string, string>(
+      periodosCatalogo.map((p) => [`${p.anno}-${p.periodo}`, p.idperiodo]),
+    );
+    // Igual que registrarHistorial (admin): la clave real de unicidad es
+    // idUser + clase + período, SIN distinguir origen — un mismo par
+    // clase/período no puede tener dos filas (una ADMIN y otra AUTOREPORTE)
+    // al mismo tiempo, porque registrarHistorial tampoco filtra por origen
+    // al decidir si actualiza o crea.
+    const historialPorClave = new Map(
+      historialExistente.map((h) => [`${h.idPlantillaMalla_has_Clase}|${h.idperiodo}`, h] as const),
+    );
+
+    const texto = archivo.buffer.toString('utf-8').replace(/^﻿/, '');
+    const lineas = texto.split(/\r\n|\r|\n/).filter((linea) => linea.trim().length > 0);
+    if (lineas.length === 0) {
+      throw new BadRequestException('El archivo CSV está vacío.');
+    }
+
+    const encabezadosEsperados = ['codigo', 'periodo', 'nota'];
+    const primeraFila = this.parseCsvLine(lineas[0]).map((c) => c.toLowerCase());
+    const tieneEncabezado = encabezadosEsperados.every((col, i) => primeraFila[i] === col);
+    const filasDatos = tieneEncabezado ? lineas.slice(1) : lineas;
+    const offset = tieneEncabezado ? 2 : 1;
+
+    const errores: string[] = [];
+    let omitidos = 0;
+    const aCrear: Prisma.HistorialAcademicoCreateManyInput[] = [];
+    const aActualizar: { id: string; estado: EstadoHistorial; nota: string }[] = [];
+
+    for (let i = 0; i < filasDatos.length; i++) {
+      const numeroFila = i + offset;
+      const [codigoRaw, periodoRaw, notaRaw] = this.parseCsvLine(filasDatos[i]);
+
+      const codigo = (codigoRaw ?? '').trim().toUpperCase();
+      if (!codigo) {
+        errores.push(`Fila ${numeroFila}: falta el código de la clase.`);
+        continue;
+      }
+      const pmcId = pmcPorCodigo.get(codigo);
+      if (!pmcId) {
+        errores.push(`Fila ${numeroFila}: la clase "${codigoRaw}" no existe en tu malla curricular.`);
+        continue;
+      }
+
+      const periodo = (periodoRaw ?? '').trim();
+      if (!/^\d{4}-[12]$/.test(periodo)) {
+        errores.push(`Fila ${numeroFila}: el período "${periodoRaw ?? ''}" debe tener el formato AAAA-1 o AAAA-2.`);
+        continue;
+      }
+      const idperiodo = idperiodoPorClave.get(periodo);
+      if (!idperiodo) {
+        errores.push(
+          `Fila ${numeroFila}: no existe el período académico ${periodo} en el catálogo. Pide al administrador que lo registre.`,
+        );
+        continue;
+      }
+
+      // El CSV solo trae la nota (el estudiante no elige "aprobada" o
+      // "reprobada" a mano): el estado se deriva de la nota contra
+      // NOTA_MINIMA_APROBACION, igual que lo haría una boleta real. Por eso
+      // este importador no acepta EN_CURSO — una clase en curso, sin nota
+      // final todavía, se sigue autorreportando desde el Pensum.
+      if ((notaRaw ?? '').trim() === '') {
+        errores.push(`Fila ${numeroFila}: falta la nota.`);
+        continue;
+      }
+      const nota = Number(notaRaw);
+      if (Number.isNaN(nota) || nota < 0 || nota > 100) {
+        errores.push(`Fila ${numeroFila}: la nota "${notaRaw}" debe ser un número entre 0 y 100.`);
+        continue;
+      }
+      const estado = nota >= NOTA_MINIMA_APROBACION ? EstadoHistorial.APROBADA : EstadoHistorial.REPROBADA;
+
+      const existente = historialPorClave.get(`${pmcId}|${idperiodo}`);
+      if (existente?.origen === OrigenHistorial.ADMIN) {
+        omitidos++;
+        continue;
+      }
+
+      if (existente) {
+        aActualizar.push({ id: existente.idHistorialAcademico, estado, nota: String(nota) });
+      } else {
+        aCrear.push({
+          idHistorialAcademico: randomUUID(),
+          idUser: userId,
+          idPlantillaMalla_has_Clase: pmcId,
+          idperiodo,
+          estado,
+          nota: String(nota),
+          origen: OrigenHistorial.AUTOREPORTE,
+          createdAt: new Date(),
+        });
+      }
+    }
+
+    if (aCrear.length > 0 || aActualizar.length > 0) {
+      await this.prisma.$transaction([
+        ...(aCrear.length > 0 ? [this.prisma.historialAcademico.createMany({ data: aCrear })] : []),
+        ...aActualizar.map((u) =>
+          this.prisma.historialAcademico.update({
+            where: { idHistorialAcademico: u.id },
+            data: { estado: u.estado, nota: u.nota },
+          }),
+        ),
+      ]);
+    }
+
+    return { totalFilas: filasDatos.length, registrados: aCrear.length + aActualizar.length, omitidos, errores };
+  }
+
+  // Parser CSV mínimo (sin dependencia externa): soporta campos entre
+  // comillas dobles con comas o comillas escapadas (""), suficiente para el
+  // formato fijo codigo,periodo,nota que espera importarHistorialCsv.
+  private parseCsvLine(line: string): string[] {
+    const campos: string[] = [];
+    let actual = '';
+    let entreComillas = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (entreComillas) {
+        if (c === '"') {
+          if (line[i + 1] === '"') {
+            actual += '"';
+            i++;
+          } else {
+            entreComillas = false;
+          }
+        } else {
+          actual += c;
+        }
+      } else if (c === '"') {
+        entreComillas = true;
+      } else if (c === ',') {
+        campos.push(actual.trim());
+        actual = '';
+      } else {
+        actual += c;
+      }
+    }
+    campos.push(actual.trim());
+    return campos;
   }
 
   async registrarHistorial(userId: string, dto: RegistrarHistorialDto) {

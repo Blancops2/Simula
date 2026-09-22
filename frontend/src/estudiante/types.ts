@@ -65,6 +65,13 @@ export interface HistorialItem {
   clase: { codigo: string; nombre: string; unidadesValorativas: number; nivel: number };
 }
 
+export interface ResultadoImportacionHistorial {
+  totalFilas: number;
+  registrados: number;
+  omitidos: number;
+  errores: string[];
+}
+
 export interface ClasePensum {
   id: string;
   codigo: string;
@@ -77,6 +84,7 @@ export interface ClasePensum {
   prerrequisitos: RequisitoRef[];
   correquisitos: RequisitoRef[];
   cursada: boolean;
+  enCurso: boolean;
   oficial: boolean;
   autorreportada: boolean;
   periodo: string | null;
@@ -94,6 +102,17 @@ export interface PeriodoDisponible {
   anno: string;
   periodo: string;
   estado: EstadoPeriodo;
+}
+
+export interface RecomendacionClases {
+  disponible: boolean;
+  fuente: 'MODELO_EXTERNO' | 'FALLBACK_LOCAL' | null;
+  clases: ClaseConEstado[];
+}
+
+export interface RecomendacionPeriodo {
+  periodo: PlanEstudioPeriodoConEstado | null;
+  completado: boolean;
 }
 
 export interface InscripcionItem {

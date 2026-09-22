@@ -6,6 +6,9 @@ import type {
   PeriodoDisponible,
   PerfilEstudiante,
   PlanEstudioPeriodoConEstado,
+  RecomendacionClases,
+  RecomendacionPeriodo,
+  ResultadoImportacionHistorial,
 } from '../estudiante/types';
 import { httpClient } from './httpClient';
 
@@ -33,6 +36,16 @@ export async function getPlanEstudio(): Promise<PlanEstudioPeriodoConEstado[]> {
   return data;
 }
 
+export async function getRecomendacionClases(): Promise<RecomendacionClases> {
+  const { data } = await httpClient.get<RecomendacionClases>('/estudiante/recomendaciones/clases');
+  return data;
+}
+
+export async function getRecomendacionPeriodo(): Promise<RecomendacionPeriodo> {
+  const { data } = await httpClient.get<RecomendacionPeriodo>('/estudiante/recomendaciones/periodo');
+  return data;
+}
+
 export async function getPeriodosDisponibles(): Promise<PeriodoDisponible[]> {
   const { data } = await httpClient.get<PeriodoDisponible[]>('/estudiante/periodos');
   return data;
@@ -40,6 +53,15 @@ export async function getPeriodosDisponibles(): Promise<PeriodoDisponible[]> {
 
 export async function getHistorial(): Promise<HistorialItem[]> {
   const { data } = await httpClient.get<HistorialItem[]>('/estudiante/historial');
+  return data;
+}
+
+export async function importarHistorial(archivo: File): Promise<ResultadoImportacionHistorial> {
+  const formData = new FormData();
+  formData.append('archivo', archivo);
+  const { data } = await httpClient.post<ResultadoImportacionHistorial>('/estudiante/historial/importar', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
   return data;
 }
 
@@ -62,16 +84,10 @@ export async function getPensum(): Promise<PensumArbol> {
   return data;
 }
 
-export interface DetalleClaseCursada {
-  periodo?: number;
-  anno?: number;
-  nota?: number;
+export async function marcarClaseEnCurso(claseId: string): Promise<void> {
+  await httpClient.post(`/estudiante/pensum/clases/${claseId}`);
 }
 
-export async function marcarClaseCursada(claseId: string, detalle?: DetalleClaseCursada): Promise<void> {
-  await httpClient.post(`/estudiante/pensum/clases/${claseId}`, detalle);
-}
-
-export async function desmarcarClaseCursada(claseId: string): Promise<void> {
+export async function desmarcarClaseEnCurso(claseId: string): Promise<void> {
   await httpClient.delete(`/estudiante/pensum/clases/${claseId}`);
 }

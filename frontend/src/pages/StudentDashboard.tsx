@@ -192,6 +192,9 @@ export function StudentDashboard() {
             <Link to="/estudiante/pensum" className="btn btn-secondary">
               Pensum
             </Link>
+            <Link to="/estudiante/historial/importar" className="btn btn-secondary">
+              Subir historial académico
+            </Link>
           </nav>
         </>
       )}

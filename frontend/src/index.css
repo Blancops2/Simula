@@ -1120,6 +1120,12 @@ select:focus {
   background: var(--color-success-soft);
 }
 
+.flow-node-en-curso {
+  border-color: var(--color-border-strong);
+  border-top-color: var(--color-border-strong);
+  background: var(--color-neutral-soft);
+}
+
 /* Escala de intensidad por nivel (canvas admin): el fondo es un pastel fijo
    (no depende del tema claro/oscuro), asi que el texto tambien se fija en
    #2D3748 para mantener el contraste >= 4.5:1 en los 10 niveles. */

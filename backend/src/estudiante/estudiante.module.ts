@@ -5,10 +5,11 @@ import { PlanEstudioModule } from '../plan-estudio/plan-estudio.module';
 import { EstudianteController } from './estudiante.controller';
 import { EstudianteService } from './estudiante.service';
 import { HistorialAdminController } from './historial-admin.controller';
+import { ModeloPredictivoService } from './modelo-predictivo.service';
 
 @Module({
   imports: [CurriculumModule, PeriodoModule, PlanEstudioModule],
   controllers: [EstudianteController, HistorialAdminController],
-  providers: [EstudianteService],
+  providers: [EstudianteService, ModeloPredictivoService],
 })
 export class EstudianteModule {}

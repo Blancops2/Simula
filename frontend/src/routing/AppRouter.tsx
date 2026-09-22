@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AdminDashboard } from '../pages/AdminDashboard';
 import { EstudiantePlanEstudioPage } from '../pages/EstudiantePlanEstudioPage';
 import { HistorialPage } from '../pages/HistorialPage';
+import { ImportarHistorialPage } from '../pages/ImportarHistorialPage';
 import { LoginPage } from '../pages/LoginPage';
 import { PlantillaEditorPage } from '../pages/PlantillaEditorPage';
 import { PensumPage } from '../pages/PensumPage';
@@ -20,6 +21,7 @@ export function AppRouter() {
       <Route element={<ProtectedRoute allowedRoles={['ESTUDIANTE']} />}>
         <Route path="/estudiante" element={<StudentDashboard />} />
         <Route path="/estudiante/historial" element={<HistorialPage />} />
+        <Route path="/estudiante/historial/importar" element={<ImportarHistorialPage />} />
         <Route path="/estudiante/malla" element={<SeleccionClasesPage />} />
         <Route path="/estudiante/pensum" element={<PensumPage />} />
         <Route path="/estudiante/plan-estudio" element={<EstudiantePlanEstudioPage />} />

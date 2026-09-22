@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { cancelarInscripcion, getInscripciones, getMalla, getPeriodosDisponibles, inscribirClases } from '../api/estudianteApi';
+import {
+  cancelarInscripcion,
+  getInscripciones,
+  getMalla,
+  getPeriodosDisponibles,
+  getRecomendacionClases,
+  getRecomendacionPeriodo,
+  inscribirClases,
+} from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
-import type { InscripcionItem, MallaConEstado, PeriodoDisponible } from '../estudiante/types';
+import type {
+  InscripcionItem,
+  MallaConEstado,
+  PeriodoDisponible,
+  RecomendacionClases,
+  RecomendacionPeriodo,
+} from '../estudiante/types';
 
 // HU-03-04: tope de unidades valorativas por matrícula. Cuenta tanto lo que
 // el estudiante ya tiene inscrito en el período elegido (otra pestaña,
@@ -27,6 +41,8 @@ export function SeleccionClasesPage() {
   // solo el botón "Cambiar período" aplica el cambio.
   const [periodoIdBorrador, setPeriodoIdBorrador] = useState<string>('');
   const [inscripciones, setInscripciones] = useState<InscripcionItem[]>([]);
+  const [recoClases, setRecoClases] = useState<RecomendacionClases>({ disponible: false, fuente: null, clases: [] });
+  const [recoPeriodo, setRecoPeriodo] = useState<RecomendacionPeriodo>({ periodo: null, completado: false });
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
@@ -43,16 +59,20 @@ export function SeleccionClasesPage() {
       setCargando(true);
       setError(null);
       try {
-        const [mallaData, periodosData, inscripcionesData] = await Promise.all([
+        const [mallaData, periodosData, inscripcionesData, recoClasesData, recoPeriodoData] = await Promise.all([
           getMalla(),
           getPeriodosDisponibles(),
           getInscripciones(),
+          getRecomendacionClases(),
+          getRecomendacionPeriodo(),
         ]);
         setMalla(mallaData);
         setPeriodos(periodosData);
         setPeriodoId(periodosData[0]?.id ?? '');
         setPeriodoIdBorrador(periodosData[0]?.id ?? '');
         setInscripciones(inscripcionesData);
+        setRecoClases(recoClasesData);
+        setRecoPeriodo(recoPeriodoData);
       } catch (err) {
         setError(errorMessage(err, 'No se pudo cargar la información de matrícula.'));
       } finally {
@@ -335,6 +355,98 @@ export function SeleccionClasesPage() {
           )}
         </section>
       )}
+
+      <section className="panel">
+        <h2>Recomendaciones</h2>
+
+        <div className="tree-level">
+          <h3 className="tree-level-title">Clases recomendadas para ti</h3>
+          {!recoClases.disponible ? (
+            <p className="tree-node-meta">Recomendaciones no disponibles por el momento.</p>
+          ) : recoClases.clases.length === 0 ? (
+            <p className="tree-node-meta">No hay clases recomendadas para ti en este momento.</p>
+          ) : (
+            <div className="tree-nodes">
+              {recoClases.clases.map((clase) => {
+                const inscripcion = inscripcionPorClaseId.get(clase.id);
+                const inscritaEnOtroPeriodo = !!inscripcion && inscripcion.periodoId !== periodoId;
+                const marcada = seleccion.has(clase.id);
+                const superaTope =
+                  !marcada && !inscripcion && uvTotal + clase.unidadesValorativas > MAX_UNIDADES_VALORATIVAS;
+                return (
+                  <div
+                    key={clase.id}
+                    className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
+                  >
+                    <div className="tree-node-title">
+                      <strong>{clase.codigo}</strong> — {clase.nombre}
+                    </div>
+                    <div className="tree-node-meta">
+                      {clase.unidadesValorativas} U.V. · {clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}
+                    </div>
+                    <span className="badge badge-accent">Recomendada</span>
+
+                    {inscripcion ? (
+                      <span className={`badge ${inscritaEnOtroPeriodo ? 'badge-neutral' : 'badge-success'}`}>
+                        Ya inscrita — {inscripcion.periodo}
+                      </span>
+                    ) : (
+                      <label className="tree-node-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={marcada}
+                          disabled={superaTope}
+                          onChange={(e) => alternarSeleccion(clase.id, clase.unidadesValorativas, e.target.checked)}
+                        />
+                        {superaTope ? 'Supera el tope de 25 U.V.' : 'Seleccionar para matricular'}
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="tree-level">
+          <h3 className="tree-level-title">Periodo de tu plan de estudio sugerido</h3>
+          {recoPeriodo.completado && !recoPeriodo.periodo ? (
+            <p className="tree-node-meta">Tu carrera todavía no tiene un plan de estudio recomendado.</p>
+          ) : recoPeriodo.completado ? (
+            <p className="tree-node-meta">Has completado tu plan de estudio.</p>
+          ) : recoPeriodo.periodo ? (
+            <div className="table-scroll">
+              <p className="tree-node-meta">
+                {recoPeriodo.periodo.anno} - {recoPeriodo.periodo.periodo}
+              </p>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>Clase</th>
+                    <th>U.V.</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recoPeriodo.periodo.clases.map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.codigo}</td>
+                      <td>{c.nombre}</td>
+                      <td>{c.unidadesValorativas}</td>
+                      <td>
+                        <span className={`badge status-${c.estadoEstudiante.toLowerCase()}`}>
+                          {c.estadoEstudiante}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       {inscripcionesPorPeriodo.length > 0 && (
         <section className="panel">
