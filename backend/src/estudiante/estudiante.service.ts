@@ -26,6 +26,12 @@ import { semestreActual } from './periodo.util';
 // estudiante en el CSV (decisión de negocio, no viene de ninguna tabla).
 const NOTA_MINIMA_APROBACION = 65;
 
+// HU-03-04: tope de unidades valorativas por período. Ya existía en el
+// frontend (SeleccionClasesPage.tsx) pero no se validaba aquí, así que un
+// cliente que llamara POST /estudiante/inscripciones directamente (sin pasar
+// por esa pantalla) podía matricular más de 25 U.V. en un mismo período.
+const MAX_UNIDADES_VALORATIVAS_POR_PERIODO = 25;
+
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
 export interface ClaseConEstado extends ClaseView {
@@ -849,6 +855,19 @@ export class EstudianteService {
     });
     const yaInscritasCodigos = new Set(yaInscritas.map((i) => i.plantillaMallaClase.clase.codigo));
     const seleccionCodigos = new Set(clases.map((c) => c.clase.codigo));
+
+    // El tope es por período: solo cuenta lo que el estudiante ya tiene
+    // inscrito EN idperiodo, más lo que está seleccionando ahora mismo.
+    const uvYaInscritasEnPeriodo = yaInscritas
+      .filter((i) => i.idperiodo === idperiodo)
+      .reduce((total, i) => total + (i.plantillaMallaClase.clase.unidadesValorativas ?? 0), 0);
+    const uvSeleccionadas = clases.reduce((total, c) => total + (c.clase.unidadesValorativas ?? 0), 0);
+    if (uvYaInscritasEnPeriodo + uvSeleccionadas > MAX_UNIDADES_VALORATIVAS_POR_PERIODO) {
+      throw new BadRequestException(
+        `La matrícula supera el tope de ${MAX_UNIDADES_VALORATIVAS_POR_PERIODO} U.V. por período ` +
+          `(ya tienes ${uvYaInscritasEnPeriodo} U.V. inscritas en este período; estás seleccionando ${uvSeleccionadas} U.V. más).`,
+      );
+    }
 
     for (const pmc of clases) {
       const codigo = pmc.clase.codigo ?? '';

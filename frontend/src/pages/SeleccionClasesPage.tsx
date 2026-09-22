@@ -31,6 +31,15 @@ function etiquetaPeriodo(p: { anno: string; periodo: string }): string {
   return `${p.anno} - Período ${p.periodo}`;
 }
 
+// Normaliza para comparar sin distinguir mayúsculas/minúsculas ni acentos
+// (para que "programacion" encuentre "Programación").
+function normalizarTexto(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+}
+
 export function SeleccionClasesPage() {
   const [malla, setMalla] = useState<MallaConEstado | null>(null);
   const [periodos, setPeriodos] = useState<PeriodoDisponible[]>([]);
@@ -44,6 +53,9 @@ export function SeleccionClasesPage() {
   const [recoClases, setRecoClases] = useState<RecomendacionClases>({ disponible: false, fuente: null, clases: [] });
   const [recoPeriodo, setRecoPeriodo] = useState<RecomendacionPeriodo>({ periodo: null, completado: false });
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
+  // HU-04-02: búsqueda por texto libre dentro del catálogo de asignaturas
+  // disponibles para matricular en el período seleccionado.
+  const [busquedaCatalogo, setBusquedaCatalogo] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -108,6 +120,23 @@ export function SeleccionClasesPage() {
         .filter((n) => n.clases.length > 0),
     [malla],
   );
+  // Filtra el catálogo de disponibles (ya acotado al período seleccionado)
+  // por nombre o código, según lo que el estudiante va escribiendo.
+  const nivelesFiltrados = useMemo(() => {
+    const q = normalizarTexto(busquedaCatalogo.trim());
+    if (!q) {
+      return nivelesDisponibles;
+    }
+    return nivelesDisponibles
+      .map((n) => ({
+        nivel: n.nivel,
+        clases: n.clases.filter(
+          (c) => normalizarTexto(c.codigo).includes(q) || normalizarTexto(c.nombre).includes(q),
+        ),
+      }))
+      .filter((n) => n.clases.length > 0);
+  }, [nivelesDisponibles, busquedaCatalogo]);
+
   const unidadesValorativasPorId = useMemo(() => {
     const mapa = new Map<string, number>();
     nivelesDisponibles.forEach((n) => n.clases.forEach((c) => mapa.set(c.id, c.unidadesValorativas)));
@@ -285,73 +314,96 @@ export function SeleccionClasesPage() {
           {nivelesDisponibles.length === 0 ? (
             <p>No tienes asignaturas disponibles para matricular en este momento.</p>
           ) : (
-            <div className="catalog-scroll">
-              <section className="tree">
-                {nivelesDisponibles.map((n) => (
-                  <div key={n.nivel} className="tree-level">
-                    <h3 className="tree-level-title">Nivel {n.nivel}</h3>
-                    <div className="tree-nodes">
-                      {n.clases.map((clase) => {
-                        const inscripcion = inscripcionPorClaseId.get(clase.id);
-                        // Inscrita en OTRO período (no el que se tiene activo ahora mismo):
-                        // se ve gris/apagada y no admite ninguna acción directa desde la
-                        // tarjeta (ni seleccionarla ni cancelarla) — para eso está la tabla
-                        // "Mis inscripciones" de más abajo. Inscrita en el período activo,
-                        // o sin inscribir todavía, se trata igual que antes (tarjeta
-                        // amarilla): solo cambia que ya no se puede cancelar desde aquí.
-                        const inscritaEnOtroPeriodo = !!inscripcion && inscripcion.periodoId !== periodoId;
-                        const marcada = seleccion.has(clase.id);
-                        const superaTope =
-                          !marcada && !inscripcion && uvTotal + clase.unidadesValorativas > MAX_UNIDADES_VALORATIVAS;
-                        return (
-                          <div
-                            key={clase.id}
-                            className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
-                          >
-                            <div className="tree-node-title">
-                              <strong>{clase.codigo}</strong> — {clase.nombre}
-                            </div>
-                            <div className="tree-node-meta">
-                              {clase.unidadesValorativas} U.V. ·{' '}
-                              {clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}
-                            </div>
+            <>
+              <div className="field catalog-search">
+                <label htmlFor="busqueda-catalogo">Buscar asignatura</label>
+                <input
+                  id="busqueda-catalogo"
+                  type="text"
+                  placeholder="Buscar por nombre o código…"
+                  value={busquedaCatalogo}
+                  onChange={(e) => setBusquedaCatalogo(e.target.value)}
+                />
+              </div>
 
-                            {clase.prerrequisitos.length > 0 && (
-                              <div className="tree-node-meta">
-                                Prerrequisitos: {clase.prerrequisitos.map((p) => p.codigo).join(', ')}
-                              </div>
-                            )}
-                            {clase.correquisitos.length > 0 && (
-                              <div className="tree-node-meta">
-                                Correquisitos: {clase.correquisitos.map((p) => p.codigo).join(', ')}
-                              </div>
-                            )}
+              {nivelesFiltrados.length === 0 ? (
+                <p className="tree-node-meta">
+                  No se encontraron asignaturas que coincidan con &quot;{busquedaCatalogo.trim()}&quot;.
+                </p>
+              ) : (
+                <div className="catalog-scroll">
+                  <section className="tree">
+                    {nivelesFiltrados.map((n) => (
+                      <div key={n.nivel} className="tree-level">
+                        <h3 className="tree-level-title">Nivel {n.nivel}</h3>
+                        <div className="tree-nodes">
+                          {n.clases.map((clase) => {
+                            const inscripcion = inscripcionPorClaseId.get(clase.id);
+                            // Inscrita en OTRO período (no el que se tiene activo ahora mismo):
+                            // se ve gris/apagada y no admite ninguna acción directa desde la
+                            // tarjeta (ni seleccionarla ni cancelarla) — para eso está la tabla
+                            // "Mis inscripciones" de más abajo. Inscrita en el período activo,
+                            // o sin inscribir todavía, se trata igual que antes (tarjeta
+                            // amarilla): solo cambia que ya no se puede cancelar desde aquí.
+                            const inscritaEnOtroPeriodo = !!inscripcion && inscripcion.periodoId !== periodoId;
+                            const marcada = seleccion.has(clase.id);
+                            const superaTope =
+                              !marcada &&
+                              !inscripcion &&
+                              uvTotal + clase.unidadesValorativas > MAX_UNIDADES_VALORATIVAS;
+                            return (
+                              <div
+                                key={clase.id}
+                                className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
+                              >
+                                <div className="tree-node-title">
+                                  <strong>{clase.codigo}</strong> — {clase.nombre}
+                                </div>
+                                <div className="tree-node-meta">
+                                  {clase.unidadesValorativas} U.V. ·{' '}
+                                  {clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}
+                                </div>
 
-                            {inscripcion ? (
-                              <span className={`badge ${inscritaEnOtroPeriodo ? 'badge-neutral' : 'badge-success'}`}>
-                                Ya inscrita — {inscripcion.periodo}
-                              </span>
-                            ) : (
-                              <label className="tree-node-checkbox">
-                                <input
-                                  type="checkbox"
-                                  checked={marcada}
-                                  disabled={superaTope}
-                                  onChange={(e) =>
-                                    alternarSeleccion(clase.id, clase.unidadesValorativas, e.target.checked)
-                                  }
-                                />
-                                {superaTope ? 'Supera el tope de 25 U.V.' : 'Seleccionar para matricular'}
-                              </label>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </section>
-            </div>
+                                {clase.prerrequisitos.length > 0 && (
+                                  <div className="tree-node-meta">
+                                    Prerrequisitos: {clase.prerrequisitos.map((p) => p.codigo).join(', ')}
+                                  </div>
+                                )}
+                                {clase.correquisitos.length > 0 && (
+                                  <div className="tree-node-meta">
+                                    Correquisitos: {clase.correquisitos.map((p) => p.codigo).join(', ')}
+                                  </div>
+                                )}
+
+                                {inscripcion ? (
+                                  <span
+                                    className={`badge ${inscritaEnOtroPeriodo ? 'badge-neutral' : 'badge-success'}`}
+                                  >
+                                    Ya inscrita — {inscripcion.periodo}
+                                  </span>
+                                ) : (
+                                  <label className="tree-node-checkbox">
+                                    <input
+                                      type="checkbox"
+                                      checked={marcada}
+                                      disabled={superaTope}
+                                      onChange={(e) =>
+                                        alternarSeleccion(clase.id, clase.unidadesValorativas, e.target.checked)
+                                      }
+                                    />
+                                    {superaTope ? 'Supera el tope de 25 U.V.' : 'Seleccionar para matricular'}
+                                  </label>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+                </div>
+              )}
+            </>
           )}
         </section>
       )}

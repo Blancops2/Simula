@@ -819,6 +819,11 @@ select:focus {
    Curriculum tree (flow-diagram style)
    ========================================================================== */
 
+.catalog-search {
+  margin-bottom: 14px;
+  max-width: 360px;
+}
+
 .catalog-scroll {
   max-height: 560px;
   overflow-y: auto;

@@ -32,6 +32,22 @@
      esa BD sí puede tener filas reales en HistorialAcademico (a diferencia
      del entorno local, que estaba vacío) y por lo tanto sí necesita el
      backfill antes del NOT NULL.
+
+   ACTUALIZACIÓN (2026-09-22):
+     Se revisó el esquema real de db_simula_local (sqlcmd contra
+     LAPTOP-P2HD9ORO\MSSQLSERVER01) contra este script y se detectaron dos
+     diferencias, ya corregidas aquí:
+       1) La tabla "Inscripcion" (clases inscritas en el período actual)
+          existe en db_simula_local pero no estaba en este DDL. Su
+          migración (backend/prisma/migrations/proposed/2026-08-30_inscripcion.sql)
+          sigue marcada como "PENDIENTE DE APROBACIÓN" para Azure, pero sí
+          se aplicó contra el entorno local, así que se agrega aquí para
+          que el script vuelva a reflejar 1:1 la BD local (igual que ya
+          hace con periodo/Auditoria). Azure real sigue sin esta tabla.
+       2) El orden de columnas de "plan_estudio" se ajustó para que
+          coincida con el real (anno al final, por haberse agregado con
+          ALTER TABLE ... ADD en 2026-09-14_plan_estudio_anno.sql en vez de
+          ir en medio de la definición original).
    ===================================================================== */
 
 -- =====================================================================
@@ -212,10 +228,10 @@ GO
 CREATE TABLE plan_estudio (
     idplan_estudio     VARCHAR(45) NOT NULL,
     idPlantillaMalla   VARCHAR(45) NOT NULL,
-    anno               VARCHAR(45) NULL,
     periodo            VARCHAR(45) NULL,
     createdAt          DATETIME2   NULL,
     updatedAt          DATETIME2   NULL,
+    anno               VARCHAR(45) NULL,
     CONSTRAINT PK_plan_estudio PRIMARY KEY (idplan_estudio)
 );
 GO
@@ -251,6 +267,26 @@ CREATE TABLE HistorialAcademico (
     idPlantillaMalla_has_Clase   VARCHAR(45) NOT NULL,
     idperiodo                    VARCHAR(45) NOT NULL,
     CONSTRAINT PK_HistorialAcademico PRIMARY KEY (idHistorialAcademico)
+);
+GO
+
+/* -----------------------------------------------------------------------
+   Clases en las que un estudiante está inscrito en el período actual.
+   Igual que HistorialAcademico, usa idperiodo -> periodo(idperiodo) en vez
+   de guardar el período como texto libre sin validar. El UNIQUE evita que
+   el mismo estudiante quede inscrito dos veces en la misma clase (misma
+   fila de PlantillaMalla_has_Clase) dentro del mismo período.
+
+   Aplicada contra db_simula_local; PENDIENTE DE APROBACIÓN para Azure real
+   (ver backend/prisma/migrations/proposed/2026-08-30_inscripcion.sql).
+   ----------------------------------------------------------------------- */
+CREATE TABLE Inscripcion (
+    idInscripcion               VARCHAR(45) NOT NULL,
+    idUser                      VARCHAR(45) NOT NULL,
+    idPlantillaMalla_has_Clase  VARCHAR(45) NOT NULL,
+    idperiodo                   VARCHAR(45) NOT NULL,
+    createdAt                   DATETIME2   NULL,
+    CONSTRAINT PK_Inscripcion PRIMARY KEY (idInscripcion)
 );
 GO
 
@@ -318,6 +354,12 @@ GO
 -- Una misma malla no puede tener dos filas de "primer año" / "primer periodo", etc.
 ALTER TABLE plan_estudio
     ADD CONSTRAINT UQ_plan_estudio_malla_anno_periodo UNIQUE (idPlantillaMalla, anno, periodo);
+GO
+
+-- Un mismo estudiante no puede inscribirse dos veces en la misma clase
+-- dentro del mismo período.
+ALTER TABLE Inscripcion
+    ADD CONSTRAINT UQ_Inscripcion_User_Clase_Periodo UNIQUE (idUser, idPlantillaMalla_has_Clase, idperiodo);
 GO
 
 -- =====================================================================
@@ -393,6 +435,21 @@ GO
 ALTER TABLE Auditoria
     ADD CONSTRAINT fk_Auditoria_User1
     FOREIGN KEY (idUser) REFERENCES [User] (idUser);
+GO
+
+ALTER TABLE Inscripcion
+    ADD CONSTRAINT fk_Inscripcion_User1
+    FOREIGN KEY (idUser) REFERENCES [User] (idUser);
+GO
+
+ALTER TABLE Inscripcion
+    ADD CONSTRAINT fk_Inscripcion_PlantillaMalla_has_Clase1
+    FOREIGN KEY (idPlantillaMalla_has_Clase) REFERENCES PlantillaMalla_has_Clase (idPlantillaMalla_has_Clase);
+GO
+
+ALTER TABLE Inscripcion
+    ADD CONSTRAINT fk_Inscripcion_periodo1
+    FOREIGN KEY (idperiodo) REFERENCES periodo (idperiodo);
 GO
 
 ALTER TABLE Session
