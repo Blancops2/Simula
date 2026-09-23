@@ -98,10 +98,11 @@ export function SeleccionClasesPage() {
   // llenó (tienen al menos una inscripción); no se muestra un grupo vacío
   // por cada período habilitado.
   const inscripcionesPorPeriodo = useMemo(() => {
-    const grupos = new Map<string, { periodoId: string; periodo: string; items: InscripcionItem[] }>();
+    const grupos = new Map<string, { periodoId: string; periodo: string; items: InscripcionItem[]; totalUv: number }>();
     inscripciones.forEach((i) => {
-      const grupo = grupos.get(i.periodoId) ?? { periodoId: i.periodoId, periodo: i.periodo, items: [] };
+      const grupo = grupos.get(i.periodoId) ?? { periodoId: i.periodoId, periodo: i.periodo, items: [], totalUv: 0 };
       grupo.items.push(i);
+      grupo.totalUv += i.clase.unidadesValorativas;
       grupos.set(i.periodoId, grupo);
     });
     return [...grupos.values()].sort((a, b) => b.periodo.localeCompare(a.periodo));
@@ -505,7 +506,12 @@ export function SeleccionClasesPage() {
           <h2>Mis inscripciones</h2>
           {inscripcionesPorPeriodo.map((grupo) => (
             <div key={grupo.periodoId} className="tree-level">
-              <h3 className="tree-level-title">Período {grupo.periodo}</h3>
+              <div className="tree-level-header">
+                <h3 className="tree-level-title">Período {grupo.periodo}</h3>
+                <span className={`badge ${grupo.totalUv >= MAX_UNIDADES_VALORATIVAS ? 'badge-warning' : 'badge-neutral'}`}>
+                  Unidades valorativas: {grupo.totalUv} / {MAX_UNIDADES_VALORATIVAS}
+                </span>
+              </div>
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
