@@ -44,11 +44,6 @@ export function SeleccionClasesPage() {
   const [malla, setMalla] = useState<MallaConEstado | null>(null);
   const [periodos, setPeriodos] = useState<PeriodoDisponible[]>([]);
   const [periodoId, setPeriodoId] = useState<string>('');
-  // Elección en el <select>, todavía no aplicada: separada de `periodoId`
-  // (el período realmente activo para el tope de U.V. y para matricular) a
-  // propósito, para que cambiar el <select> no dispare nada por sí solo —
-  // solo el botón "Cambiar período" aplica el cambio.
-  const [periodoIdBorrador, setPeriodoIdBorrador] = useState<string>('');
   const [inscripciones, setInscripciones] = useState<InscripcionItem[]>([]);
   const [recoClases, setRecoClases] = useState<RecomendacionClases>({ disponible: false, fuente: null, clases: [] });
   const [recoPeriodo, setRecoPeriodo] = useState<RecomendacionPeriodo>({ periodo: null, completado: false });
@@ -59,7 +54,6 @@ export function SeleccionClasesPage() {
   const [error, setError] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
-  const [cambiandoPeriodo, setCambiandoPeriodo] = useState(false);
   const [inscribiendo, setInscribiendo] = useState(false);
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
 
@@ -81,7 +75,6 @@ export function SeleccionClasesPage() {
         setMalla(mallaData);
         setPeriodos(periodosData);
         setPeriodoId(periodosData[0]?.id ?? '');
-        setPeriodoIdBorrador(periodosData[0]?.id ?? '');
         setInscripciones(inscripcionesData);
         setRecoClases(recoClasesData);
         setRecoPeriodo(recoPeriodoData);
@@ -204,41 +197,36 @@ export function SeleccionClasesPage() {
     }
   }, [seleccion, periodoId]);
 
-  // Aplica el período elegido en el <select> (solo si de verdad cambió) y
-  // "recarga": descarta la selección pendiente (las U.V. ya marcadas eran
-  // relativas al período anterior, no tiene sentido arrastrarlas a uno
-  // nuevo), refresca la lista de períodos habilitados y las inscripciones
-  // vigentes por si algo cambió mientras tanto (otra pestaña, un admin
-  // deshabilitando el período, etc. — AC2).
-  const cambiarPeriodo = useCallback(async () => {
-    if (!periodoIdBorrador || periodoIdBorrador === periodoId) {
-      return;
-    }
-    setCambiandoPeriodo(true);
+  // El <select> aplica el período directamente, sin paso de confirmación
+  // intermedio: antes existía un botón "Cambiar período" separado, pero
+  // dejaba una ventana confusa donde el <select> ya mostraba el período
+  // nuevo sin que "Hacer inscripción" lo estuviera usando todavía (si el
+  // estudiante no hacía clic en "Cambiar período", la inscripción se seguía
+  // creando en el período anterior). Con un único estado, lo que se ve en
+  // el <select> es siempre lo que se usa al matricular. Se descarta la
+  // selección pendiente al cambiar (las U.V. ya marcadas eran relativas al
+  // período anterior, no tiene sentido arrastrarlas a uno nuevo); la
+  // revalidación de que el período siga existiendo/habilitado ya la hace el
+  // backend en el momento de "Hacer inscripción" (AC3 de HU-03-04).
+  const cambiarPeriodoId = useCallback((nuevoPeriodoId: string) => {
+    setPeriodoId(nuevoPeriodoId);
+    setSeleccion(new Set());
     setError(null);
     setMensajeExito(null);
-    try {
-      const [periodosData, inscripcionesData] = await Promise.all([getPeriodosDisponibles(), getInscripciones()]);
-      setPeriodos(periodosData);
-      // El período elegido en el <select> pudo dejar de estar habilitado
-      // justo mientras se refrescaba: si ya no aparece en la lista fresca,
-      // no se aplica (se avisa y se mantiene el período activo anterior).
-      if (!periodosData.some((p) => p.id === periodoIdBorrador)) {
-        setPeriodoIdBorrador(periodoId);
-        setError('El período elegido ya no está habilitado. Elige otro de la lista actualizada.');
-        return;
-      }
-      setPeriodoId(periodoIdBorrador);
-      setInscripciones(inscripcionesData);
-      setSeleccion(new Set());
-    } catch (err) {
-      setError(errorMessage(err, 'No se pudo cambiar de período.'));
-    } finally {
-      setCambiandoPeriodo(false);
-    }
-  }, [periodoId, periodoIdBorrador]);
+  }, []);
 
-  const cancelarClase = useCallback(async (inscripcionId: string) => {
+  // HU-04-05 (AC4): a diferencia de desmarcar un checkbox pendiente, esto
+  // borra una inscripción real sin forma de deshacer — se pide confirmación
+  // explícita antes de llamar al backend.
+  const cancelarClase = useCallback(async (inscripcion: InscripcionItem) => {
+    if (
+      !window.confirm(
+        `¿Estás seguro de que deseas eliminar esta clase inscrita? ${inscripcion.clase.codigo} - ${inscripcion.clase.nombre}`,
+      )
+    ) {
+      return;
+    }
+    const inscripcionId = inscripcion.id;
     setCancelandoId(inscripcionId);
     setError(null);
     setMensajeExito(null);
@@ -279,7 +267,7 @@ export function SeleccionClasesPage() {
                 {periodos.length === 0 ? (
                   <span className="tree-node-meta">No hay períodos habilitados.</span>
                 ) : (
-                  <select value={periodoIdBorrador} onChange={(e) => setPeriodoIdBorrador(e.target.value)}>
+                  <select value={periodoId} onChange={(e) => cambiarPeriodoId(e.target.value)}>
                     {periodos.map((p) => (
                       <option key={p.id} value={p.id}>
                         {etiquetaPeriodo(p)}
@@ -288,16 +276,6 @@ export function SeleccionClasesPage() {
                   </select>
                 )}
               </label>
-              {periodos.length > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-catalog-blue btn-sm"
-                  onClick={cambiarPeriodo}
-                  disabled={periodoIdBorrador === periodoId || cambiandoPeriodo}
-                >
-                  {cambiandoPeriodo ? 'Cambiando…' : 'Cambiar período'}
-                </button>
-              )}
               <span className={`badge ${uvTotal >= MAX_UNIDADES_VALORATIVAS ? 'badge-warning' : 'badge-neutral'}`}>
                 {uvTotal} / {MAX_UNIDADES_VALORATIVAS} U.V. seleccionadas
               </span>
@@ -305,7 +283,7 @@ export function SeleccionClasesPage() {
                 type="button"
                 className="btn btn-catalog-blue"
                 onClick={hacerInscripcion}
-                disabled={seleccion.size === 0 || !periodoId || inscribiendo || cambiandoPeriodo}
+                disabled={seleccion.size === 0 || !periodoId || inscribiendo}
               >
                 {inscribiendo ? 'Inscribiendo…' : 'Hacer inscripción'}
               </button>
@@ -536,7 +514,7 @@ export function SeleccionClasesPage() {
                           <button
                             type="button"
                             className="btn btn-catalog-blue btn-sm"
-                            onClick={() => cancelarClase(i.id)}
+                            onClick={() => cancelarClase(i)}
                             disabled={cancelandoId === i.id}
                           >
                             {cancelandoId === i.id ? 'Cancelando…' : 'Cancelar inscripción'}
