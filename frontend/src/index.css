@@ -973,6 +973,18 @@ select:focus {
   color: #d7dfe8;
 }
 
+/* HU-04-06: resalta la tarjeta completa mientras está marcada (carga
+   propuesta pendiente de confirmar), no solo el checkbox — para que se
+   note sin tener que fijarse en un control chico. */
+.tree-node-seleccionada {
+  border-color: var(--color-gold);
+  box-shadow: 0 0 0 2px var(--color-gold-strong);
+}
+
+.tree-node-seleccionada:hover {
+  box-shadow: 0 0 0 2px var(--color-gold-strong), var(--shadow-md);
+}
+
 .tree-node-title {
   display: flex;
   align-items: center;
@@ -1345,6 +1357,138 @@ select:focus {
   margin-bottom: 14px;
 }
 
+/* ==========================================================================
+   Carga propuesta — panel flotante (HU-04-06)
+   ========================================================================== */
+
+.floating-cart {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: 40;
+  overflow: hidden;
+}
+
+.floating-cart-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+}
+
+.floating-cart-header-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.floating-cart-contador {
+  font-weight: 500;
+}
+
+.floating-cart-periodo {
+  font-weight: 400;
+}
+
+.floating-cart-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+}
+
+.floating-cart-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.floating-cart-row:hover {
+  background: var(--color-bg-subtle);
+}
+
+.floating-cart-row-info {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.floating-cart-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.floating-cart-remove:hover {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+}
+
+.floating-cart-footer {
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.floating-cart-footer .btn {
+  width: 100%;
+}
+
+.floating-cart-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  text-align: center;
+}
+
+.floating-cart-success-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.floating-cart-success p {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-success);
+}
+
 @media (max-width: 860px) {
   .app-sidebar {
     position: static;
@@ -1410,5 +1554,13 @@ select:focus {
 
   .tree-nodes {
     grid-template-columns: 1fr;
+  }
+
+  .floating-cart {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    width: auto;
+    max-width: none;
   }
 }

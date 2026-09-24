@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelarInscripcion,
   getInscripciones,
@@ -56,6 +56,20 @@ export function SeleccionClasesPage() {
   const [cargando, setCargando] = useState(true);
   const [inscribiendo, setInscribiendo] = useState(false);
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
+  // HU-04-06 (ampliación): tras un "Hacer inscripción" exitoso, el panel
+  // flotante muestra este mensaje en vez de la lista, y se cierra solo
+  // (sin que el estudiante tenga que hacer nada) 2 segundos después.
+  const [exitoCargaVisible, setExitoCargaVisible] = useState(false);
+  const exitoCargaTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (exitoCargaTimeoutRef.current) {
+        clearTimeout(exitoCargaTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   // Las clases se muestran de inmediato (no dependen de elegir un período
   // primero): el período solo se necesita al final, cuando el estudiante ya
@@ -107,6 +121,12 @@ export function SeleccionClasesPage() {
     return mapa;
   }, [inscripciones]);
 
+  // Período elegido actualmente en el <select>, para mostrarlo también en
+  // el panel flotante (HU-04-06 ampliación) — ahí no se ve el encabezado
+  // del catálogo, así que el estudiante no tiene otra forma de confirmar
+  // para qué período está armando la carga sin desplazarse hacia arriba.
+  const periodoActivo = useMemo(() => periodos.find((p) => p.id === periodoId), [periodos, periodoId]);
+
   const nivelesDisponibles = useMemo(
     () =>
       (malla?.niveles ?? [])
@@ -131,9 +151,11 @@ export function SeleccionClasesPage() {
       .filter((n) => n.clases.length > 0);
   }, [nivelesDisponibles, busquedaCatalogo]);
 
-  const unidadesValorativasPorId = useMemo(() => {
-    const mapa = new Map<string, number>();
-    nivelesDisponibles.forEach((n) => n.clases.forEach((c) => mapa.set(c.id, c.unidadesValorativas)));
+  const claseInfoPorId = useMemo(() => {
+    const mapa = new Map<string, { codigo: string; nombre: string; unidadesValorativas: number }>();
+    nivelesDisponibles.forEach((n) =>
+      n.clases.forEach((c) => mapa.set(c.id, { codigo: c.codigo, nombre: c.nombre, unidadesValorativas: c.unidadesValorativas })),
+    );
     return mapa;
   }, [nivelesDisponibles]);
 
@@ -142,8 +164,26 @@ export function SeleccionClasesPage() {
   const uvYaInscritas = inscripciones
     .filter((i) => i.periodoId === periodoId)
     .reduce((total, i) => total + i.clase.unidadesValorativas, 0);
-  const uvSeleccionadas = [...seleccion].reduce((total, id) => total + (unidadesValorativasPorId.get(id) ?? 0), 0);
+  const uvSeleccionadas = [...seleccion].reduce(
+    (total, id) => total + (claseInfoPorId.get(id)?.unidadesValorativas ?? 0),
+    0,
+  );
   const uvTotal = uvYaInscritas + uvSeleccionadas;
+
+  // HU-04-06: detalle (código, nombre, U.V.) de cada asignatura marcada
+  // pero todavía sin confirmar, para la ventanita flotante de "carga
+  // propuesta" — la lista completa que antes no existía en ningún lugar.
+  const seleccionadasInfo = useMemo(
+    () =>
+      [...seleccion]
+        .map((id) => {
+          const info = claseInfoPorId.get(id);
+          return info ? { id, ...info } : null;
+        })
+        .filter((x): x is { id: string; codigo: string; nombre: string; unidadesValorativas: number } => x !== null)
+        .sort((a, b) => a.codigo.localeCompare(b.codigo)),
+    [seleccion, claseInfoPorId],
+  );
 
   const alternarSeleccion = useCallback(
     (claseId: string, unidadesValorativas: number, marcar: boolean) => {
@@ -163,6 +203,9 @@ export function SeleccionClasesPage() {
     [uvTotal],
   );
 
+  // HU-04-06 (ampliación): al terminar con éxito, el panel flotante no se
+  // cierra de inmediato — pasa a mostrar "Inscripción exitosa" en vez de la
+  // lista, y se cierra solo 2 segundos después (ver `exitoCargaVisible`).
   const hacerInscripcion = useCallback(async () => {
     if (seleccion.size === 0 || !periodoId) {
       return;
@@ -179,6 +222,11 @@ export function SeleccionClasesPage() {
       setInscripciones(actualizadas);
       setSeleccion(new Set());
       setMensajeExito('Inscripción realizada correctamente.');
+      setExitoCargaVisible(true);
+      if (exitoCargaTimeoutRef.current) {
+        clearTimeout(exitoCargaTimeoutRef.current);
+      }
+      exitoCargaTimeoutRef.current = setTimeout(() => setExitoCargaVisible(false), 2000);
     } catch (err) {
       setError(errorMessage(err, 'No se pudo completar la inscripción.'));
       // El error más probable en este punto es que el período elegido dejó
@@ -333,7 +381,7 @@ export function SeleccionClasesPage() {
                             return (
                               <div
                                 key={clase.id}
-                                className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
+                                className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'} ${marcada ? 'tree-node-seleccionada' : ''}`}
                               >
                                 <div className="tree-node-title">
                                   <strong>{clase.codigo}</strong> — {clase.nombre}
@@ -407,7 +455,7 @@ export function SeleccionClasesPage() {
                 return (
                   <div
                     key={clase.id}
-                    className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'}`}
+                    className={`tree-node ${inscritaEnOtroPeriodo ? 'tree-node-otro-periodo' : 'tree-node-disponible'} ${marcada ? 'tree-node-seleccionada' : ''}`}
                   >
                     <div className="tree-node-title">
                       <strong>{clase.codigo}</strong> — {clase.nombre}
@@ -528,6 +576,81 @@ export function SeleccionClasesPage() {
             </div>
           ))}
         </section>
+      )}
+
+      {/* HU-04-06: panel flotante con la carga propuesta (asignaturas
+          marcadas, aún sin confirmar) — visible solo mientras hay al menos
+          una seleccionada, para que el estudiante siempre tenga a la vista
+          qué lleva marcado, sin tener que recorrer el catálogo. Se queda
+          visible un momento más tras confirmar (`exitoCargaVisible`) para
+          mostrar el mensaje de éxito antes de cerrarse solo. */}
+      {(seleccionadasInfo.length > 0 || exitoCargaVisible) && (
+        <aside className="floating-cart" aria-label="Carga propuesta">
+          {exitoCargaVisible ? (
+            <div className="floating-cart-success">
+              <span className="floating-cart-success-icon" aria-hidden="true">
+                ✓
+              </span>
+              <p>Inscripción exitosa</p>
+            </div>
+          ) : (
+            <>
+              <div className="floating-cart-header">
+                <div className="floating-cart-header-main">
+                  <span>Carga propuesta</span>
+                  <span className={`badge ${uvTotal >= MAX_UNIDADES_VALORATIVAS ? 'badge-warning' : 'badge-neutral'}`}>
+                    {uvTotal} / {MAX_UNIDADES_VALORATIVAS} U.V.
+                  </span>
+                </div>
+                {/* HU-04-07: contador de asignaturas de la carga propuesta, en
+                    su propia línea para no competir por espacio con el badge
+                    de U.V.; texto explícito y `aria-live` para que el cambio
+                    también se anuncie en lectores de pantalla al agregar o quitar. */}
+                <span className="floating-cart-contador" aria-live="polite">
+                  {seleccionadasInfo.length}{' '}
+                  {seleccionadasInfo.length === 1 ? 'asignatura seleccionada' : 'asignaturas seleccionadas'}
+                </span>
+                {/* HU-04-06 (ampliación): el período se elige en el encabezado
+                    del catálogo, pero esta ventanita queda flotando fuera de
+                    ese contexto — se repite aquí para que el estudiante
+                    siempre sepa para qué período está armando la carga, sin
+                    tener que desplazarse hacia arriba a comprobarlo. */}
+                <span className="tree-node-meta floating-cart-periodo">
+                  {periodoActivo ? `Período: ${etiquetaPeriodo(periodoActivo)}` : 'Sin período seleccionado'}
+                </span>
+              </div>
+              <ul className="floating-cart-list">
+                {seleccionadasInfo.map((c) => (
+                  <li key={c.id} className="floating-cart-row">
+                    <div className="floating-cart-row-info">
+                      <strong>{c.codigo}</strong> — {c.nombre}
+                      <span className="tree-node-meta">{c.unidadesValorativas} U.V.</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="floating-cart-remove"
+                      onClick={() => alternarSeleccion(c.id, c.unidadesValorativas, false)}
+                      aria-label={`Quitar ${c.codigo} de la carga propuesta`}
+                      title="Quitar de la carga propuesta"
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="floating-cart-footer">
+                <button
+                  type="button"
+                  className="btn btn-catalog-blue"
+                  onClick={hacerInscripcion}
+                  disabled={!periodoId || inscribiendo}
+                >
+                  {inscribiendo ? 'Inscribiendo…' : 'Hacer inscripción'}
+                </button>
+              </div>
+            </>
+          )}
+        </aside>
       )}
     </AppShell>
   );
