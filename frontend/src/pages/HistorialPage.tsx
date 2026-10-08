@@ -8,6 +8,7 @@ const ETIQUETAS_ESTADO: Record<HistorialItem['estado'], string> = {
   APROBADA: 'Aprobada',
   REPROBADA: 'Reprobada',
   EN_CURSO: 'En curso',
+  NSP: 'No se presentó',
 };
 
 export function HistorialPage() {

@@ -6,18 +6,20 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Role } from '../common/enums';
 import { CurrentUser, RequestUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
+import { SimularCargaDto } from './dto/simular-carga.dto';
 import { InscribirClasesDto } from './dto/inscribir-clases.dto';
 import { EstudianteService } from './estudiante.service';
 
@@ -33,6 +35,15 @@ export class EstudianteController {
   @ApiOperation({ summary: 'Perfil del estudiante autenticado: datos básicos y avance académico.' })
   perfil(@CurrentUser() user: RequestUser) {
     return this.estudiante.obtenerPerfil(user.userId, user);
+  }
+
+  @Get('resumen-academico')
+  @ApiOperation({
+    summary:
+      'Información académica del estudiante para el resumen de la carga: carrera, U.V. aprobadas e índice académico (Σ nota×U.V. / Σ U.V. de los intentos aprobados y reprobados; NSP y en curso no cuentan). Se calcula en cada consulta, no se guarda.',
+  })
+  resumenAcademico(@CurrentUser() user: RequestUser) {
+    return this.estudiante.obtenerResumenAcademico(user.userId, user);
   }
 
   @Patch('perfil')
@@ -70,10 +81,16 @@ export class EstudianteController {
   @Get('recomendaciones/clases')
   @ApiOperation({
     summary:
-      'Clases recomendadas por el modelo predictivo (HU-04-01) para el período actual. `disponible: false` cuando el modelo no está configurado o no respondió.',
+      'Carga académica completa recomendada por el modelo predictivo (HU-04-01, contrato v1.1) para el período, con la misma estructura que una simulación: probabilidad de aprobar toda la carga y cada clase, riesgo calculado por SIMULA. Es una alternativa a lo inscrito (puede conservar clases ya inscritas, `inscritaEnPeriodo`); solo informativa, no inscribe ni cancela nada. Sin modelo configurado se usa un fallback local sin probabilidades (`fuente: FALLBACK_LOCAL`); `disponible: false` cuando el modelo está configurado pero no respondió.',
   })
-  recomendacionClases(@CurrentUser() user: RequestUser) {
-    return this.estudiante.obtenerRecomendacionClases(user.userId, user);
+  @ApiQuery({
+    name: 'periodoId',
+    required: false,
+    description:
+      'Período seleccionado (debe estar habilitado). Si se indica, se le informan al modelo las clases ya inscritas en él.',
+  })
+  recomendacionClases(@CurrentUser() user: RequestUser, @Query('periodoId') periodoId?: string) {
+    return this.estudiante.obtenerRecomendacionClases(user.userId, user, periodoId || undefined);
   }
 
   @Get('recomendaciones/periodo')
@@ -83,6 +100,25 @@ export class EstudianteController {
   })
   recomendacionPeriodo(@CurrentUser() user: RequestUser) {
     return this.estudiante.obtenerRecomendacionPeriodo(user.userId, user);
+  }
+
+  // 201: cada llamada crea una simulación nueva (tabla Simulacion).
+  @Post('simulaciones')
+  @ApiOperation({
+    summary:
+      'Simula con el modelo predictivo (HU-04-08) la carga INSCRITA del estudiante en el período: genera y persiste la estructura de entrada (estudiante, período, clases) y la evalúa: probabilidad de aprobar toda la carga y cada clase, con el riesgo calculado por SIMULA. `disponible: false` (con `falla`) si el modelo no está configurado o no respondió; la simulación queda guardada igual. `400` si el período no está habilitado o no hay clases inscritas en él.',
+  })
+  simular(@CurrentUser() user: RequestUser, @Body() dto: SimularCargaDto) {
+    return this.estudiante.simular(user.userId, dto.periodoId, user);
+  }
+
+  @Get('simulaciones/:id')
+  @ApiOperation({
+    summary:
+      'Simulación persistida del estudiante autenticado (estructura de entrada del modelo predictivo y su resultado), con la misma forma que la respuesta de `POST /estudiante/simulaciones`.',
+  })
+  obtenerSimulacion(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.estudiante.obtenerSimulacion(user.userId, id);
   }
 
   @Get('historial')

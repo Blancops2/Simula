@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import {
   EstadoHistorial,
   EstadoPeriodo,
+  EstadoSimulacion,
   OrigenHistorial,
   ROLE_ID_MAP,
   Role,
@@ -17,7 +18,18 @@ import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
 import { PlanEstudioService } from '../plan-estudio/plan-estudio.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
-import { ModeloPredictivoService } from './modelo-predictivo.service';
+import {
+  CamposControlSolicitud,
+  ClaseCargaModelo,
+  EstadoHistorialModelo,
+  EstudianteModelo,
+  HistorialModelo,
+  OrigenClaseCarga,
+  OrigenHistorialModelo,
+  VERSION_CONTRATO_MODELO,
+} from './modelo-predictivo.contrato';
+import { FallaPrediccion, ModeloPredictivoService } from './modelo-predictivo.service';
+import { NivelRiesgo, riesgoClase, riesgoGlobal } from './riesgo.util';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
 import { semestreActual } from './periodo.util';
 
@@ -31,6 +43,15 @@ const NOTA_MINIMA_APROBACION = 65;
 // cliente que llamara POST /estudiante/inscripciones directamente (sin pasar
 // por esa pantalla) podía matricular más de 25 U.V. en un mismo período.
 const MAX_UNIDADES_VALORATIVAS_POR_PERIODO = 25;
+
+// Estados de HistorialAcademico que entiende el contrato del modelo
+// predictivo; una fila con otro valor (o null) no se le envía.
+const ESTADOS_HISTORIAL_MODELO = new Set<string>([
+  EstadoHistorial.APROBADA,
+  EstadoHistorial.REPROBADA,
+  EstadoHistorial.EN_CURSO,
+  EstadoHistorial.NSP,
+]);
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -49,6 +70,14 @@ export interface AvanceAcademico {
   unidadesValorativasTotalesObligatorias: number;
   unidadesValorativasAprobadasObligatorias: number;
   porcentajeMallaCompletada: number;
+}
+
+export interface ResumenAcademico {
+  carrera: { id: string; nombre: string | null; codigo: string | null } | null;
+  unidadesValorativasAprobadas: number;
+  // null si todavía no hay ninguna clase aprobada o reprobada con nota.
+  indiceAcademico: number | null;
+  clasesConsideradas: number;
 }
 
 export interface ClasePensum extends ClaseView {
@@ -75,15 +104,80 @@ export interface ResultadoImportacionHistorial {
   errores: string[];
 }
 
+// Clase de la carga recomendada: la clase de la malla más el resultado del
+// modelo (null/[] en el fallback local, que no estima probabilidades).
+export interface ClaseRecomendada extends ClaseConEstado {
+  inscritaEnPeriodo: boolean; // la propuesta conserva una clase ya inscrita
+  probabilidadAprobacion: number | null;
+  riesgo: NivelRiesgo | null;
+  factores: string[];
+  motivo: string | null;
+}
+
+// Respuesta de GET /estudiante/recomendaciones/clases (contrato v1.1): misma
+// estructura que una simulación (SimulacionRespuesta), pero de una carga
+// propuesta por el modelo, no inscrita.
 export interface RecomendacionClases {
   disponible: boolean;
   fuente: 'MODELO_EXTERNO' | 'FALLBACK_LOCAL' | null;
-  clases: ClaseConEstado[];
+  // NO_CONFIGURADO acompaña al fallback local; con disponible = false es el
+  // motivo por el que no hay recomendación.
+  falla: FallaPrediccion | null;
+  periodo: { id: string; anno: string; periodo: string } | null;
+  versionModelo: string | null;
+  probabilidadAprobarTodo: number | null;
+  riesgo: NivelRiesgo | null;
+  limiteUnidadesValorativas: number;
+  totalUnidadesValorativas: number;
+  clases: ClaseRecomendada[];
+  observaciones: string[];
 }
 
 export interface RecomendacionPeriodo {
   periodo: PlanEstudioPeriodoConEstado | null;
   completado: boolean;
+}
+
+// Respuesta de POST /estudiante/simulaciones y GET /estudiante/simulaciones/:id
+// (HU-04-08; reemplaza a la de POST /estudiante/evaluacion-carga de la §7 de
+// docs/modelo-predictivo/03-decisiones-contrato.md). Primero la estructura de
+// entrada persistida, siempre presente; después el resultado del modelo. Las
+// probabilidades vienen del modelo; el riesgo lo calcula SIMULA (D5).
+export interface SimulacionRespuesta {
+  idSimulacion: string;
+  estado: EstadoSimulacion;
+  idEstudiante: string;
+  // estado = periodo.estado al generar la simulación (siempre 'habilitado':
+  // no se simula sobre un período que no lo esté).
+  periodo: { id: string; anno: string; periodo: string; estado: string | null };
+  limiteUnidadesValorativas: number;
+  totalUnidadesValorativas: number;
+  fechaGeneracion: string | null;
+  carga: {
+    id: string; // idPlantillaMalla_has_Clase
+    codigo: string;
+    nombre: string;
+    unidadesValorativas: number;
+    origen: OrigenClaseCarga;
+  }[];
+  disponible: boolean;
+  // Por qué no hay evaluación, para que la UI dé un mensaje específico
+  // (p. ej. carrera no soportada por el modelo). null cuando disponible.
+  falla: FallaPrediccion | null;
+  versionModelo: string | null;
+  probabilidadAprobarTodo: number | null;
+  riesgo: NivelRiesgo | null;
+  clases: {
+    id: string;
+    codigo: string;
+    nombre: string;
+    unidadesValorativas: number;
+    origen: OrigenClaseCarga;
+    probabilidadAprobacion: number;
+    riesgo: NivelRiesgo;
+    factores: string[];
+  }[];
+  observaciones: string[];
 }
 
 @Injectable()
@@ -126,6 +220,56 @@ export class EstudianteService {
             unidadesValorativasAprobadasObligatorias: 0,
             porcentajeMallaCompletada: 0,
           },
+    };
+  }
+
+  // Información académica que acompaña el resumen de la carga en la
+  // ventana de inscripción. El índice no se guarda: se calcula del historial
+  // en cada consulta, así siempre refleja el historial vigente.
+  async obtenerResumenAcademico(userId: string, currentUser: RequestUser): Promise<ResumenAcademico> {
+    const [perfil, historial] = await Promise.all([
+      this.obtenerPerfil(userId, currentUser),
+      this.prisma.historialAcademico.findMany({
+        where: { idUser: userId },
+        include: { plantillaMallaClase: { include: { clase: true } } },
+      }),
+    ]);
+    return {
+      carrera: perfil.carrera,
+      unidadesValorativasAprobadas: perfil.avance.unidadesValorativasAprobadas,
+      ...this.calcularIndiceAcademico(historial),
+    };
+  }
+
+  // Índice académico = Σ(nota × U.V.) / Σ(U.V.). Cuentan todos los intentos
+  // aprobados y reprobados (también las repeticiones); NSP y EN_CURSO no
+  // tienen nota y quedan fuera.
+  private calcularIndiceAcademico(
+    intentos: {
+      estado: string | null;
+      nota: string | null;
+      plantillaMallaClase: { clase: { unidadesValorativas: number | null } };
+    }[],
+  ): Pick<ResumenAcademico, 'indiceAcademico' | 'clasesConsideradas'> {
+    let sumaPonderada = 0;
+    let sumaUnidades = 0;
+    let clasesConsideradas = 0;
+    for (const intento of intentos) {
+      if (intento.estado !== EstadoHistorial.APROBADA && intento.estado !== EstadoHistorial.REPROBADA) {
+        continue;
+      }
+      const nota = intento.nota !== null && intento.nota.trim() !== '' ? Number(intento.nota) : NaN;
+      if (!Number.isFinite(nota)) {
+        continue;
+      }
+      const unidadesValorativas = intento.plantillaMallaClase.clase.unidadesValorativas ?? 0;
+      sumaPonderada += nota * unidadesValorativas;
+      sumaUnidades += unidadesValorativas;
+      clasesConsideradas++;
+    }
+    return {
+      indiceAcademico: sumaUnidades > 0 ? Math.round((sumaPonderada / sumaUnidades) * 100) / 100 : null,
+      clasesConsideradas,
     };
   }
 
@@ -204,42 +348,536 @@ export class EstudianteService {
 
   // ---------- Recomendaciones (HU-04-01) ----------
 
-  // Recomendación 1: clases sugeridas por un modelo predictivo externo (fuera
-  // de nuestro alcance). Si no hay modelo configurado, el adaptador usa un
-  // fallback local basado en el nivel sugerido; si el modelo está
+  // Recomendación 1: carga académica completa propuesta por un modelo
+  // predictivo externo (fuera de nuestro alcance; contrato v1.1 en
+  // docs/modelo-predictivo/05-recomendacion-carga.md), con la misma
+  // estructura que una simulación: probabilidad de aprobar toda la carga y
+  // cada clase. Es una ALTERNATIVA a lo inscrito en el período (puede
+  // conservar clases ya inscritas); solo se muestra, el estudiante decide a
+  // mano si cancela o inscribe algo. Sin modelo configurado se usa un
+  // fallback local (nivel sugerido, sin probabilidades); si el modelo está
   // configurado pero falla, se reporta `disponible: false` en vez de
   // disfrazar el fallback como una recomendación real.
-  async obtenerRecomendacionClases(userId: string, currentUser: RequestUser): Promise<RecomendacionClases> {
-    const user = await this.obtenerEstudianteOFallar(userId);
+  async obtenerRecomendacionClases(
+    userId: string,
+    currentUser: RequestUser,
+    periodoId?: string,
+  ): Promise<RecomendacionClases> {
+    const contexto = await this.construirContextoModelo(userId, currentUser, periodoId);
+    const { periodo, inscripcionesPeriodo, codigosInscritosEnPeriodo } = contexto;
+    const limite = MAX_UNIDADES_VALORATIVAS_POR_PERIODO;
+
+    const base = {
+      periodo: periodo ? { id: periodo.idperiodo, anno: periodo.anno ?? '', periodo: periodo.periodo ?? '' } : null,
+      limiteUnidadesValorativas: limite,
+    };
+    const conDatos = (c: ClaseConEstado) => ({ ...c, inscritaEnPeriodo: codigosInscritosEnPeriodo.has(c.codigo) });
+    const totalUv = (clases: { unidadesValorativas: number }[]) =>
+      clases.reduce((total, c) => total + c.unidadesValorativas, 0);
+
+    if (!this.modeloPredictivo.estaConfigurado()) {
+      // Fallback: candidatas del nivel sugerido, en orden de malla, hasta
+      // llenar el tope de U.V. (es una carga, no una lista sin límite).
+      const clases: ClaseRecomendada[] = [];
+      for (const c of contexto.clasesCandidatas.filter((c) => c.nivel === contexto.nivelSugerido)) {
+        if (totalUv(clases) + c.unidadesValorativas <= limite) {
+          clases.push({ ...conDatos(c), probabilidadAprobacion: null, riesgo: null, factores: [], motivo: null });
+        }
+      }
+      return {
+        ...base,
+        disponible: true,
+        fuente: 'FALLBACK_LOCAL',
+        falla: 'NO_CONFIGURADO',
+        versionModelo: null,
+        probabilidadAprobarTodo: null,
+        riesgo: null,
+        totalUnidadesValorativas: totalUv(clases),
+        clases,
+        observaciones: [],
+      };
+    }
+
+    const sinRecomendacion = (falla: FallaPrediccion): RecomendacionClases => ({
+      ...base,
+      disponible: false,
+      fuente: null,
+      falla,
+      versionModelo: null,
+      probabilidadAprobarTodo: null,
+      riesgo: null,
+      totalUnidadesValorativas: 0,
+      clases: [],
+      observaciones: [],
+    });
+
+    const { estudiante, historial } = await this.construirPerfilEHistorialModelo(
+      userId,
+      contexto.malla,
+      contexto.nivelSugerido,
+    );
+    const resultado = await this.modeloPredictivo.recomendar({
+      estudiante,
+      historial,
+      cargaActual: periodo
+        ? {
+            periodo: base.periodo!,
+            limiteUnidadesValorativas: limite,
+            clasesInscritas: [...codigosInscritosEnPeriodo],
+            totalUnidadesValorativas: inscripcionesPeriodo.reduce(
+              (total, i) => total + (i.plantillaMallaClase.clase.unidadesValorativas ?? 0),
+              0,
+            ),
+          }
+        : null,
+      limiteUnidadesValorativas: limite,
+      clasesCandidatas: contexto.clasesCandidatas.map((c) => ({
+        codigoClase: c.codigo,
+        nombreClase: c.nombre,
+        unidadesValorativas: c.unidadesValorativas,
+        nivel: c.nivel,
+        obligatoria: c.tipo === TipoClase.OBLIGATORIA,
+        inscritaEnPeriodo: codigosInscritosEnPeriodo.has(c.codigo),
+        prerrequisitos: c.prerrequisitos.map((r) => r.codigo),
+        correquisitos: c.correquisitos.map((r) => r.codigo),
+      })),
+    });
+    if (!resultado.ok) {
+      return sinRecomendacion(resultado.falla);
+    }
+
+    // Se respeta el orden del modelo. El adaptador ya garantizó que todo
+    // código es candidato, sin repetidos y dentro del tope.
+    const respuesta = resultado.respuesta;
+    const candidatasPorCodigo = new Map(contexto.clasesCandidatas.map((c) => [c.codigo, c]));
+    const clases = respuesta.clases.map(
+      (r): ClaseRecomendada => ({
+        ...conDatos(candidatasPorCodigo.get(r.codigoClase)!),
+        probabilidadAprobacion: r.probabilidadAprobacion,
+        riesgo: riesgoClase(r.probabilidadAprobacion),
+        factores: r.factores,
+        motivo: r.motivo,
+      }),
+    );
+    return {
+      ...base,
+      disponible: true,
+      fuente: 'MODELO_EXTERNO',
+      falla: null,
+      versionModelo: respuesta.versionModelo,
+      probabilidadAprobarTodo: respuesta.probabilidadAprobarTodo,
+      riesgo: respuesta.probabilidadAprobarTodo === null ? null : riesgoGlobal(respuesta.probabilidadAprobarTodo),
+      totalUnidadesValorativas: totalUv(clases),
+      clases,
+      observaciones: respuesta.observaciones,
+    };
+  }
+
+  // HU-04-08: simula la carga académica INSCRITA en un período: probabilidad
+  // de aprobarla completa y cada clase, según el modelo predictivo. Lo que el
+  // estudiante marca en el catálogo sin inscribir no se simula; la
+  // inscripción es la matrícula simulada. Se hace en dos etapas para que la
+  // entrada del modelo quede persistida (tabla Simulacion): primero se genera
+  // y guarda la estructura (estudiante + período + carga) y luego la etapa de
+  // simulación la lee de la BD y consulta al modelo. No hay fallback local:
+  // SIMULA no estima probabilidades por su cuenta, así que sin modelo
+  // configurado (o si falla) se responde `disponible: false` con el motivo,
+  // pero la simulación queda guardada igual.
+  async simular(userId: string, periodoId: string, currentUser: RequestUser): Promise<SimulacionRespuesta> {
+    const idSimulacion = await this.generarSimulacion(userId, periodoId, currentUser);
+    return this.evaluarSimulacion(idSimulacion);
+  }
+
+  // Simulación ya generada (y evaluada o no) del estudiante autenticado.
+  async obtenerSimulacion(userId: string, idSimulacion: string): Promise<SimulacionRespuesta> {
+    const simulacion = await this.prisma.simulacion.findFirst({
+      where: { idSimulacion, idUser: userId },
+      include: { periodo: true, clases: true },
+    });
+    if (!simulacion) {
+      throw new NotFoundException('La simulación indicada no existe.');
+    }
+    return this.aRespuestaSimulacion(simulacion);
+  }
+
+  // Etapa 1: estructura de entrada del modelo. La carga = las clases
+  // inscritas en el período (tabla Inscripcion), leídas de la BD en este
+  // momento: inscribir o cancelar una clase se refleja en la siguiente
+  // simulación. Se guarda como una simulación NUEVA (foto inmutable de la
+  // carga), sin duplicados: el PK (idSimulacion, idPlantillaMalla_has_Clase)
+  // y el UNIQUE por código lo garantizan también en la BD.
+  private async generarSimulacion(userId: string, periodoId: string, currentUser: RequestUser): Promise<string> {
+    const contexto = await this.construirContextoModelo(userId, currentUser, periodoId);
+    const { periodo, inscripcionesPeriodo } = contexto;
+    if (!periodo) {
+      throw new BadRequestException('Debes indicar un período académico (periodoId) para simular la carga.');
+    }
+
+    const clasesMalla = contexto.malla.niveles.flatMap((n) => n.clases);
+    const mallaPorId = new Map(clasesMalla.map((c) => [c.id, c]));
+    const mallaPorCodigo = new Map(clasesMalla.map((c) => [c.codigo, c]));
+
+    // Una inscripción puede apuntar a otra versión de la malla (reasignación
+    // del admin): se busca por id y luego por código en la malla actual, y si
+    // ya no existe en ella se arma con los datos de la propia inscripción.
+    const inscritas = inscripcionesPeriodo.map((i): ClaseCargaModelo & { id: string } => {
+      const pmc = i.plantillaMallaClase;
+      const actual = mallaPorId.get(pmc.idPlantillaMalla_has_Clase) ?? mallaPorCodigo.get(pmc.clase.codigo ?? '');
+      if (actual) {
+        return {
+          id: actual.id,
+          codigoClase: actual.codigo,
+          nombreClase: actual.nombre,
+          unidadesValorativas: actual.unidadesValorativas,
+          nivel: actual.nivel,
+          obligatoria: actual.tipo === TipoClase.OBLIGATORIA,
+          origen: 'INSCRITA',
+          prerrequisitos: actual.prerrequisitos.map((r) => r.codigo),
+          correquisitos: actual.correquisitos.map((r) => r.codigo),
+        };
+      }
+      return {
+        id: pmc.idPlantillaMalla_has_Clase,
+        codigoClase: pmc.clase.codigo ?? '',
+        nombreClase: pmc.clase.nombre,
+        unidadesValorativas: pmc.clase.unidadesValorativas ?? 0,
+        nivel: pmc.posicion.nivel ?? 0,
+        obligatoria: pmc.obligatoria !== false,
+        origen: 'INSCRITA',
+        prerrequisitos: [],
+        correquisitos: [],
+      };
+    });
+
+    // Entre inscripciones de distintas versiones de la malla podría repetirse
+    // un código (o resolverse a la misma clase actual), y el modelo cruza
+    // por código.
+    const codigosVistos = new Set<string>();
+    const carga = inscritas.filter((c) => {
+      if (codigosVistos.has(c.codigoClase)) {
+        return false;
+      }
+      codigosVistos.add(c.codigoClase);
+      return true;
+    });
+    if (carga.length === 0) {
+      throw new BadRequestException(
+        'No tienes clases inscritas en este período: inscribe al menos una para poder simular la carga.',
+      );
+    }
+
+    const { estudiante, historial } = await this.construirPerfilEHistorialModelo(
+      userId,
+      contexto.malla,
+      contexto.nivelSugerido,
+    );
+    const control = ModeloPredictivoService.nuevoControl();
+    const ahora = new Date();
+    const idSimulacion = randomUUID();
+    await this.prisma.simulacion.create({
+      data: {
+        idSimulacion,
+        idUser: userId,
+        idperiodo: periodo.idperiodo,
+        idPlantillaMalla: contexto.malla.plantilla.id,
+        estadoPeriodo: periodo.estado,
+        estado: EstadoSimulacion.GENERADA,
+        nivelSugerido: contexto.nivelSugerido,
+        limiteUnidadesValorativas: MAX_UNIDADES_VALORATIVAS_POR_PERIODO,
+        totalUnidadesValorativas: carga.reduce((total, c) => total + c.unidadesValorativas, 0),
+        versionContrato: control.versionContrato,
+        idSolicitud: control.idSolicitud,
+        estudianteModelo: JSON.stringify(estudiante),
+        historialModelo: JSON.stringify(historial),
+        createdAt: ahora,
+        updatedAt: ahora,
+        clases: {
+          create: carga.map((c) => ({
+            idPlantillaMalla_has_Clase: c.id,
+            codigoClase: c.codigoClase,
+            nombreClase: c.nombreClase,
+            unidadesValorativas: c.unidadesValorativas,
+            nivel: c.nivel,
+            obligatoria: c.obligatoria,
+            origen: c.origen,
+            prerrequisitos: JSON.stringify(c.prerrequisitos),
+            correquisitos: JSON.stringify(c.correquisitos),
+          })),
+        },
+      },
+    });
+    return idSimulacion;
+  }
+
+  // Etapa 2: consume la estructura persistida, consulta al modelo y guarda
+  // el resultado en la misma simulación. La respuesta se arma releyendo la
+  // BD, así lo que ve el estudiante es exactamente lo que quedó guardado.
+  private async evaluarSimulacion(idSimulacion: string): Promise<SimulacionRespuesta> {
+    const simulacion = await this.prisma.simulacion.findUniqueOrThrow({
+      where: { idSimulacion },
+      include: { periodo: true, clases: true },
+    });
+
+    const marcarNoEvaluada = (falla: FallaPrediccion, fechaSolicitud: Date | null) =>
+      this.prisma.simulacion.update({
+        where: { idSimulacion },
+        data: { estado: EstadoSimulacion.NO_EVALUADA, falla, fechaSolicitud, updatedAt: new Date() },
+      });
+
+    if (!this.modeloPredictivo.estaConfigurado()) {
+      await marcarNoEvaluada('NO_CONFIGURADO', null);
+      return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+    }
+
+    const control: CamposControlSolicitud = {
+      versionContrato: simulacion.versionContrato as typeof VERSION_CONTRATO_MODELO,
+      idSolicitud: simulacion.idSolicitud,
+      fechaSolicitud: new Date().toISOString(),
+    };
+    const resultado = await this.modeloPredictivo.evaluarCarga(
+      {
+        estudiante: JSON.parse(simulacion.estudianteModelo) as EstudianteModelo,
+        historial: JSON.parse(simulacion.historialModelo) as HistorialModelo[],
+        cargaAcademica: {
+          periodo: {
+            id: simulacion.periodo.idperiodo,
+            anno: simulacion.periodo.anno ?? '',
+            periodo: simulacion.periodo.periodo ?? '',
+          },
+          limiteUnidadesValorativas: simulacion.limiteUnidadesValorativas,
+          clases: this.ordenarClasesSimulacion(simulacion.clases).map(
+            (c): ClaseCargaModelo => ({
+              codigoClase: c.codigoClase,
+              nombreClase: c.nombreClase,
+              unidadesValorativas: c.unidadesValorativas,
+              nivel: c.nivel,
+              obligatoria: c.obligatoria,
+              origen: c.origen as OrigenClaseCarga,
+              prerrequisitos: JSON.parse(c.prerrequisitos) as string[],
+              correquisitos: JSON.parse(c.correquisitos) as string[],
+            }),
+          ),
+          totalUnidadesValorativas: simulacion.totalUnidadesValorativas,
+        },
+      },
+      control,
+    );
+    const fechaSolicitud = new Date(control.fechaSolicitud);
+
+    if (!resultado.ok) {
+      await marcarNoEvaluada(resultado.falla, fechaSolicitud);
+      return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+    }
+
+    // El adaptador ya garantizó exactamente una evaluación por clase de la carga.
+    const respuesta = resultado.respuesta;
+    const ahora = new Date();
+    await this.prisma.$transaction([
+      this.prisma.simulacion.update({
+        where: { idSimulacion },
+        data: {
+          estado: EstadoSimulacion.EVALUADA,
+          falla: null,
+          versionModelo: respuesta.versionModelo,
+          probabilidadAprobarTodo: respuesta.probabilidadAprobarTodo,
+          riesgo: riesgoGlobal(respuesta.probabilidadAprobarTodo),
+          observaciones: JSON.stringify(respuesta.observaciones),
+          fechaSolicitud,
+          fechaEvaluacion: ahora,
+          updatedAt: ahora,
+        },
+      }),
+      ...respuesta.clases.map((e) =>
+        this.prisma.simulacion_has_Clase.update({
+          where: { idSimulacion_codigoClase: { idSimulacion, codigoClase: e.codigoClase } },
+          data: {
+            probabilidadAprobacion: e.probabilidadAprobacion,
+            riesgo: riesgoClase(e.probabilidadAprobacion),
+            factores: JSON.stringify(e.factores),
+          },
+        }),
+      ),
+    ]);
+    return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+  }
+
+  // Orden estable por código, ya que la tabla no guarda posición.
+  private ordenarClasesSimulacion<T extends { codigoClase: string }>(clases: T[]): T[] {
+    return [...clases].sort((a, b) => a.codigoClase.localeCompare(b.codigoClase));
+  }
+
+  private aRespuestaSimulacion(
+    simulacion: Prisma.SimulacionGetPayload<{ include: { periodo: true; clases: true } }>,
+  ): SimulacionRespuesta {
+    const clasesOrdenadas = this.ordenarClasesSimulacion(simulacion.clases);
+    // La estructura de entrada (criterio 1 de HU-04-08) va siempre, se haya
+    // evaluado o no; el resultado del modelo solo si estado = EVALUADA.
+    const estructura = {
+      idSimulacion: simulacion.idSimulacion,
+      estado: simulacion.estado as EstadoSimulacion,
+      idEstudiante: simulacion.idUser,
+      periodo: {
+        id: simulacion.periodo.idperiodo,
+        anno: simulacion.periodo.anno ?? '',
+        periodo: simulacion.periodo.periodo ?? '',
+        estado: simulacion.estadoPeriodo,
+      },
+      limiteUnidadesValorativas: simulacion.limiteUnidadesValorativas,
+      totalUnidadesValorativas: simulacion.totalUnidadesValorativas,
+      fechaGeneracion: simulacion.createdAt?.toISOString() ?? null,
+      carga: clasesOrdenadas.map((c) => ({
+        id: c.idPlantillaMalla_has_Clase,
+        codigo: c.codigoClase,
+        nombre: c.nombreClase ?? '',
+        unidadesValorativas: c.unidadesValorativas,
+        origen: c.origen as OrigenClaseCarga,
+      })),
+    };
+
+    if (simulacion.estado !== EstadoSimulacion.EVALUADA || simulacion.probabilidadAprobarTodo === null) {
+      return {
+        ...estructura,
+        disponible: false,
+        // GENERADA sin falla = la evaluación se interrumpió antes de guardar
+        // el resultado; para la UI es lo mismo que "no disponible".
+        falla: (simulacion.falla as FallaPrediccion | null) ?? 'NO_DISPONIBLE',
+        versionModelo: null,
+        probabilidadAprobarTodo: null,
+        riesgo: null,
+        clases: [],
+        observaciones: [],
+      };
+    }
+    return {
+      ...estructura,
+      disponible: true,
+      falla: null,
+      versionModelo: simulacion.versionModelo,
+      probabilidadAprobarTodo: Number(simulacion.probabilidadAprobarTodo),
+      riesgo: simulacion.riesgo as NivelRiesgo,
+      clases: clasesOrdenadas.map((c) => {
+        const probabilidad = Number(c.probabilidadAprobacion ?? 0);
+        return {
+          id: c.idPlantillaMalla_has_Clase,
+          codigo: c.codigoClase,
+          nombre: c.nombreClase ?? '',
+          unidadesValorativas: c.unidadesValorativas,
+          origen: c.origen as OrigenClaseCarga,
+          probabilidadAprobacion: probabilidad,
+          riesgo: (c.riesgo as NivelRiesgo | null) ?? riesgoClase(probabilidad),
+          factores: c.factores ? (JSON.parse(c.factores) as string[]) : [],
+        };
+      }),
+      observaciones: simulacion.observaciones ? (JSON.parse(simulacion.observaciones) as string[]) : [],
+    };
+  }
+
+  // Datos base para hablar con el modelo predictivo: malla con estado, nivel
+  // sugerido, clases que el estudiante puede inscribir hoy y, si se indicó,
+  // el período seleccionado con lo ya inscrito en él. El período se valida
+  // igual que en el catálogo y la inscripción (HU-03-04: existe y está
+  // habilitado, con auditoría del rechazo).
+  private async construirContextoModelo(userId: string, currentUser: RequestUser, periodoId?: string) {
+    await this.obtenerEstudianteOFallar(userId);
     const plantillaId = await this.obtenerPlantillaAsignada(userId);
     if (!plantillaId) {
       throw new NotFoundException('Aún no tienes una plantilla de malla curricular asignada.');
     }
+    const periodo = periodoId ? await this.obtenerPeriodoHabilitadoOFallar(periodoId, userId) : null;
 
-    const malla = await this.construirMallaConEstado(plantillaId, userId, currentUser);
-    const todasLasClases = malla.niveles.flatMap((n) => n.clases);
-    const nivelSugerido = this.calcularSemestreSugerido(malla);
-    const codigosAprobados = todasLasClases
-      .filter((c) => c.estadoEstudiante === 'APROBADA')
-      .map((c) => c.codigo);
+    const [malla, inscripciones] = await Promise.all([
+      this.construirMallaConEstado(plantillaId, userId, currentUser),
+      this.prisma.inscripcion.findMany({
+        where: { idUser: userId },
+        include: { plantillaMallaClase: { include: { clase: true, posicion: true } } },
+      }),
+    ]);
 
-    const resultado = await this.modeloPredictivo.obtenerCodigosRecomendados(
-      { codigoEstudiantil: user.codigoInstitucional, codigosAprobados, nivelSugerido },
-      () =>
-        todasLasClases
-          .filter((c) => c.estadoEstudiante === 'DISPONIBLE' && c.nivel === nivelSugerido)
-          .map((c) => c.codigo),
+    const inscripcionesPeriodo = periodo ? inscripciones.filter((i) => i.idperiodo === periodo.idperiodo) : [];
+    const codigosInscritosEnPeriodo = new Set(inscripcionesPeriodo.map((i) => i.plantillaMallaClase.clase.codigo ?? ''));
+
+    // Candidatas para la carga recomendada (contrato v1.1): clases
+    // DISPONIBLES que no estén inscritas en OTRO período (una clase inscrita
+    // en cualquier período no se puede volver a inscribir, ver inscribir).
+    // Las inscritas en el período seleccionado sí entran: la recomendación es
+    // una carga completa alternativa y puede conservarlas.
+    const codigosInscritosEnOtroPeriodo = new Set(
+      inscripciones
+        .filter((i) => !periodo || i.idperiodo !== periodo.idperiodo)
+        .map((i) => i.plantillaMallaClase.clase.codigo),
     );
+    const clasesCandidatas = malla.niveles
+      .flatMap((n) => n.clases)
+      .filter((c) => c.estadoEstudiante === 'DISPONIBLE' && !codigosInscritosEnOtroPeriodo.has(c.codigo));
 
-    if (!resultado) {
-      return { disponible: false, fuente: null, clases: [] };
-    }
+    return {
+      malla,
+      nivelSugerido: this.calcularSemestreSugerido(malla),
+      clasesCandidatas,
+      codigosInscritosEnPeriodo,
+      periodo,
+      inscripcionesPeriodo,
+    };
+  }
 
-    const codigosRecomendados = new Set(resultado.codigos);
-    const clases = todasLasClases.filter(
-      (c) => c.estadoEstudiante === 'DISPONIBLE' && codigosRecomendados.has(c.codigo),
-    );
-    return { disponible: true, fuente: resultado.fuente, clases };
+  // Perfil y historial completo en el formato del contrato del modelo. Solo
+  // se arma cuando de verdad se va a llamar al modelo (consulta el historial
+  // con períodos y la carrera, que el fallback local no necesita).
+  private async construirPerfilEHistorialModelo(
+    userId: string,
+    malla: MallaConEstado,
+    nivelSugerido: number,
+  ): Promise<{ estudiante: EstudianteModelo; historial: HistorialModelo[] }> {
+    const [carrera, registros] = await Promise.all([
+      this.prisma.carrera.findUnique({ where: { idCarrera: malla.plantilla.carreraId } }),
+      this.prisma.historialAcademico.findMany({
+        where: { idUser: userId },
+        include: { plantillaMallaClase: { include: { clase: true } }, periodo: true },
+        orderBy: [{ periodo: { anno: 'asc' } }, { periodo: { periodo: 'asc' } }, { createdAt: 'asc' }],
+      }),
+    ]);
+
+    const estudiante: EstudianteModelo = {
+      idEstudiante: userId,
+      // D1: no se comparte el código institucional; el modelo recibe el
+      // historial completo y no necesita buscar al estudiante por su cuenta.
+      codigoEstudiantil: null,
+      carrera: { id: malla.plantilla.carreraId, codigo: carrera?.codigo ?? null, nombre: carrera?.nombre ?? null },
+      malla: { id: malla.plantilla.id, nombre: malla.plantilla.nombre, version: malla.plantilla.version },
+      nivelSugerido,
+      avance: {
+        ...this.calcularAvance(malla),
+        indiceAcademico: this.calcularIndiceAcademico(registros).indiceAcademico,
+      },
+    };
+
+    // Se envían TODOS los intentos (reprobadas, NSP y repeticiones incluidas), sin
+    // deduplicar: los intentos fallidos son la señal más útil para predecir.
+    // Nivel y obligatoriedad salen de la malla ACTUAL cruzando por código
+    // (igual que construirMallaConEstado), y quedan en null si la clase ya no
+    // pertenece a ella.
+    const clasesPorCodigo = new Map(malla.niveles.flatMap((n) => n.clases).map((c) => [c.codigo, c]));
+    const historial = registros
+      .filter((h) => ESTADOS_HISTORIAL_MODELO.has(h.estado ?? ''))
+      .map((h): HistorialModelo => {
+        const codigo = h.plantillaMallaClase.clase.codigo ?? '';
+        const claseActual = clasesPorCodigo.get(codigo);
+        const estado = h.estado as EstadoHistorialModelo;
+        const nota = h.nota !== null && h.nota.trim() !== '' ? Number(h.nota) : NaN;
+        return {
+          codigoClase: codigo,
+          nombreClase: h.plantillaMallaClase.clase.nombre,
+          unidadesValorativas: h.plantillaMallaClase.clase.unidadesValorativas ?? 0,
+          nivel: claseActual?.nivel ?? null,
+          obligatoria: claseActual ? claseActual.tipo === TipoClase.OBLIGATORIA : null,
+          periodo: { anno: h.periodo.anno ?? '', periodo: h.periodo.periodo ?? '' },
+          estado,
+          nota: estado !== EstadoHistorial.EN_CURSO && Number.isFinite(nota) ? nota : null,
+          origen: (h.origen as OrigenHistorialModelo) ?? OrigenHistorial.ADMIN,
+        };
+      });
+
+    return { estudiante, historial };
   }
 
   // Recomendación 2: el periodo de plan_estudio (secuencia recomendada de la
@@ -581,8 +1219,8 @@ export class EstudianteService {
   // aquí (misma regla que marcarClaseEnCurso más arriba), así que las filas
   // del CSV que choquen con uno oficial simplemente se cuentan como
   // "omitidas".
-  // El CSV no trae columna "estado": el estudiante solo aporta la nota y el
-  // estado (APROBADA/REPROBADA) se calcula contra NOTA_MINIMA_APROBACION,
+  // El CSV no trae columna "estado": el estudiante solo aporta la nota (o
+  // NSP) y el estado (APROBADA/REPROBADA) se calcula contra NOTA_MINIMA_APROBACION,
   // para no pedirle un dato que ya se deduce de la nota y evitar que
   // escriba un estado inconsistente con ella.
   //
@@ -648,7 +1286,7 @@ export class EstudianteService {
     const errores: string[] = [];
     let omitidos = 0;
     const aCrear: Prisma.HistorialAcademicoCreateManyInput[] = [];
-    const aActualizar: { id: string; estado: EstadoHistorial; nota: string }[] = [];
+    const aActualizar: { id: string; estado: EstadoHistorial; nota: string | null }[] = [];
 
     for (let i = 0; i < filasDatos.length; i++) {
       const numeroFila = i + offset;
@@ -682,17 +1320,27 @@ export class EstudianteService {
       // "reprobada" a mano): el estado se deriva de la nota contra
       // NOTA_MINIMA_APROBACION, igual que lo haría una boleta real. Por eso
       // este importador no acepta EN_CURSO — una clase en curso, sin nota
-      // final todavía, se sigue autorreportando desde el Pensum.
-      if ((notaRaw ?? '').trim() === '') {
+      // final todavía, se sigue autorreportando desde el Pensum. "NSP" (no se
+      // presentó) se acepta en lugar de la nota y se guarda sin nota.
+      const notaTexto = (notaRaw ?? '').trim();
+      if (notaTexto === '') {
         errores.push(`Fila ${numeroFila}: falta la nota.`);
         continue;
       }
-      const nota = Number(notaRaw);
-      if (Number.isNaN(nota) || nota < 0 || nota > 100) {
-        errores.push(`Fila ${numeroFila}: la nota "${notaRaw}" debe ser un número entre 0 y 100.`);
-        continue;
+      let estado: EstadoHistorial;
+      let notaGuardada: string | null;
+      if (notaTexto.toUpperCase() === EstadoHistorial.NSP) {
+        estado = EstadoHistorial.NSP;
+        notaGuardada = null;
+      } else {
+        const nota = Number(notaTexto);
+        if (Number.isNaN(nota) || nota < 0 || nota > 100) {
+          errores.push(`Fila ${numeroFila}: la nota "${notaRaw}" debe ser un número entre 0 y 100, o NSP.`);
+          continue;
+        }
+        estado = nota >= NOTA_MINIMA_APROBACION ? EstadoHistorial.APROBADA : EstadoHistorial.REPROBADA;
+        notaGuardada = String(nota);
       }
-      const estado = nota >= NOTA_MINIMA_APROBACION ? EstadoHistorial.APROBADA : EstadoHistorial.REPROBADA;
 
       const existente = historialPorClave.get(`${pmcId}|${idperiodo}`);
       if (existente?.origen === OrigenHistorial.ADMIN) {
@@ -701,7 +1349,7 @@ export class EstudianteService {
       }
 
       if (existente) {
-        aActualizar.push({ id: existente.idHistorialAcademico, estado, nota: String(nota) });
+        aActualizar.push({ id: existente.idHistorialAcademico, estado, nota: notaGuardada });
       } else {
         aCrear.push({
           idHistorialAcademico: randomUUID(),
@@ -709,7 +1357,7 @@ export class EstudianteService {
           idPlantillaMalla_has_Clase: pmcId,
           idperiodo,
           estado,
-          nota: String(nota),
+          nota: notaGuardada,
           origen: OrigenHistorial.AUTOREPORTE,
           createdAt: new Date(),
         });

@@ -335,6 +335,63 @@ CREATE TABLE Auditoria (
 );
 GO
 
+/* -----------------------------------------------------------------------
+   HU-04-08 — Simulaciones (estructura de entrada del modelo predictivo).
+   Simulacion guarda estudiante + período seleccionado (con su estado al
+   generarla) + campos de control del contrato v1.0 y el resultado global
+   del modelo; Simulacion_has_Clase, una fila por asignatura de la carga
+   (PROPUESTA o INSCRITA) con su resultado. Cada "Evaluar carga" genera
+   una simulación nueva. Listas y bloques del contrato van como JSON en
+   NVARCHAR(MAX).
+
+   Aplicada contra db_simula_local (2026-10-01); PENDIENTE DE APROBACIÓN
+   para Azure real (ver backend/prisma/migrations/proposed/2026-10-01_simulacion.sql).
+   ----------------------------------------------------------------------- */
+CREATE TABLE Simulacion (
+    idSimulacion               VARCHAR(45)   NOT NULL,
+    idUser                     VARCHAR(45)   NOT NULL,
+    idperiodo                  VARCHAR(45)   NOT NULL,
+    idPlantillaMalla           VARCHAR(45)   NOT NULL,
+    estadoPeriodo              VARCHAR(45)   NULL,
+    estado                     VARCHAR(45)   NOT NULL,
+    nivelSugerido              INT           NULL,
+    limiteUnidadesValorativas  INT           NOT NULL,
+    totalUnidadesValorativas   INT           NOT NULL,
+    versionContrato            VARCHAR(45)   NOT NULL,
+    idSolicitud                VARCHAR(45)   NOT NULL,
+    fechaSolicitud             DATETIME2     NULL,
+    estudianteModelo           NVARCHAR(MAX) NOT NULL,
+    historialModelo            NVARCHAR(MAX) NOT NULL,
+    versionModelo              VARCHAR(45)   NULL,
+    probabilidadAprobarTodo    DECIMAL(5,4)  NULL,
+    riesgo                     VARCHAR(45)   NULL,
+    observaciones              NVARCHAR(MAX) NULL,
+    falla                      VARCHAR(45)   NULL,
+    fechaEvaluacion            DATETIME2     NULL,
+    createdAt                  DATETIME2     NULL,
+    updatedAt                  DATETIME2     NULL,
+    CONSTRAINT PK_Simulacion PRIMARY KEY (idSimulacion)
+);
+GO
+
+CREATE TABLE Simulacion_has_Clase (
+    idSimulacion                VARCHAR(45)   NOT NULL,
+    idPlantillaMalla_has_Clase  VARCHAR(45)   NOT NULL,
+    codigoClase                 VARCHAR(45)   NOT NULL,
+    nombreClase                 VARCHAR(100)  NULL,
+    unidadesValorativas         INT           NOT NULL,
+    nivel                       INT           NOT NULL,
+    obligatoria                 BIT           NOT NULL,
+    origen                      VARCHAR(45)   NOT NULL,
+    prerrequisitos              NVARCHAR(MAX) NOT NULL,
+    correquisitos               NVARCHAR(MAX) NOT NULL,
+    probabilidadAprobacion      DECIMAL(5,4)  NULL,
+    riesgo                      VARCHAR(45)   NULL,
+    factores                    NVARCHAR(MAX) NULL,
+    CONSTRAINT PK_Simulacion_has_Clase PRIMARY KEY (idSimulacion, idPlantillaMalla_has_Clase)
+);
+GO
+
 -- =====================================================================
 -- 4) RESTRICCIONES UNIQUE ADICIONALES REQUERIDAS PARA LAS FKs
 --    (necesarias porque Requisito e HistorialAcademico referencian
@@ -360,6 +417,17 @@ GO
 -- dentro del mismo período.
 ALTER TABLE Inscripcion
     ADD CONSTRAINT UQ_Inscripcion_User_Clase_Periodo UNIQUE (idUser, idPlantillaMalla_has_Clase, idperiodo);
+GO
+
+-- HU-04-08: el modelo cruza su respuesta por codigoClase, así que una
+-- simulación no puede llevar la misma asignatura dos veces; idSolicitud
+-- identifica de forma única la petición enviada al modelo.
+ALTER TABLE Simulacion_has_Clase
+    ADD CONSTRAINT UQ_Simulacion_has_Clase_codigo UNIQUE (idSimulacion, codigoClase);
+GO
+
+ALTER TABLE Simulacion
+    ADD CONSTRAINT UQ_Simulacion_idSolicitud UNIQUE (idSolicitud);
 GO
 
 -- =====================================================================
@@ -479,6 +547,31 @@ GO
 
 ALTER TABLE plan_estudio_has_PlantillaMalla_has_Clase
     ADD CONSTRAINT fk_plan_estudio_has_PlantillaMalla_has_Clase_PMhC1
+    FOREIGN KEY (idPlantillaMalla_has_Clase) REFERENCES PlantillaMalla_has_Clase (idPlantillaMalla_has_Clase);
+GO
+
+ALTER TABLE Simulacion
+    ADD CONSTRAINT fk_Simulacion_User1
+    FOREIGN KEY (idUser) REFERENCES [User] (idUser);
+GO
+
+ALTER TABLE Simulacion
+    ADD CONSTRAINT fk_Simulacion_periodo1
+    FOREIGN KEY (idperiodo) REFERENCES periodo (idperiodo);
+GO
+
+ALTER TABLE Simulacion
+    ADD CONSTRAINT fk_Simulacion_PlantillaMalla1
+    FOREIGN KEY (idPlantillaMalla) REFERENCES PlantillaMalla (idPlantillaMalla);
+GO
+
+ALTER TABLE Simulacion_has_Clase
+    ADD CONSTRAINT fk_Simulacion_has_Clase_Simulacion1
+    FOREIGN KEY (idSimulacion) REFERENCES Simulacion (idSimulacion);
+GO
+
+ALTER TABLE Simulacion_has_Clase
+    ADD CONSTRAINT fk_Simulacion_has_Clase_PlantillaMalla_has_Clase1
     FOREIGN KEY (idPlantillaMalla_has_Clase) REFERENCES PlantillaMalla_has_Clase (idPlantillaMalla_has_Clase);
 GO
 

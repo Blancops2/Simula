@@ -9,11 +9,18 @@ import type {
   RecomendacionClases,
   RecomendacionPeriodo,
   ResultadoImportacionHistorial,
+  ResumenAcademico,
+  SimulacionCarga,
 } from '../estudiante/types';
 import { httpClient } from './httpClient';
 
 export async function getPerfil(): Promise<PerfilEstudiante> {
   const { data } = await httpClient.get<PerfilEstudiante>('/estudiante/perfil');
+  return data;
+}
+
+export async function getResumenAcademico(): Promise<ResumenAcademico> {
+  const { data } = await httpClient.get<ResumenAcademico>('/estudiante/resumen-academico');
   return data;
 }
 
@@ -36,8 +43,19 @@ export async function getPlanEstudio(): Promise<PlanEstudioPeriodoConEstado[]> {
   return data;
 }
 
-export async function getRecomendacionClases(): Promise<RecomendacionClases> {
-  const { data } = await httpClient.get<RecomendacionClases>('/estudiante/recomendaciones/clases');
+// `periodoId` opcional: si se indica, el modelo predictivo considera lo ya
+// inscrito en ese período al recomendar.
+export async function getRecomendacionClases(periodoId?: string): Promise<RecomendacionClases> {
+  const { data } = await httpClient.get<RecomendacionClases>('/estudiante/recomendaciones/clases', {
+    params: periodoId ? { periodoId } : undefined,
+  });
+  return data;
+}
+
+// HU-04-08: simula la carga inscrita en el período (el backend toma las
+// inscripciones de la BD; no se mandan clases).
+export async function simularCarga(periodoId: string): Promise<SimulacionCarga> {
+  const { data } = await httpClient.post<SimulacionCarga>('/estudiante/simulaciones', { periodoId });
   return data;
 }
 

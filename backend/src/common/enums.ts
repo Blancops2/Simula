@@ -49,6 +49,8 @@ export const EstadoHistorial = {
   APROBADA: 'APROBADA',
   REPROBADA: 'REPROBADA',
   EN_CURSO: 'EN_CURSO',
+  // No se presentó: intento sin nota; no cuenta para el índice académico.
+  NSP: 'NSP',
 } as const;
 export type EstadoHistorial = (typeof EstadoHistorial)[keyof typeof EstadoHistorial];
 
@@ -67,3 +69,14 @@ export const EstadoPeriodo = {
   DESHABILITADO: 'deshabilitado',
 } as const;
 export type EstadoPeriodo = (typeof EstadoPeriodo)[keyof typeof EstadoPeriodo];
+
+// Simulacion.estado (tabla propuesta en migrations/proposed/2026-10-01_simulacion.sql):
+// GENERADA = estructura de entrada persistida, aún sin consultar al modelo;
+// EVALUADA = el modelo respondió; NO_EVALUADA = no hubo evaluación (el motivo
+// queda en Simulacion.falla).
+export const EstadoSimulacion = {
+  GENERADA: 'GENERADA',
+  EVALUADA: 'EVALUADA',
+  NO_EVALUADA: 'NO_EVALUADA',
+} as const;
+export type EstadoSimulacion = (typeof EstadoSimulacion)[keyof typeof EstadoSimulacion];

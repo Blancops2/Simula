@@ -89,6 +89,7 @@ model User {
   plantillasAsignadas PlantillaMalla_has_User[]
   inscripciones       Inscripcion[]
   auditorias          Auditoria[]
+  simulaciones        Simulacion[]
 }
 
 model PlantillaMalla {
@@ -107,6 +108,7 @@ model PlantillaMalla {
   clases          PlantillaMalla_has_Clase[]
   estudiantes     PlantillaMalla_has_User[]
   planesEstudio   PlanEstudio[]
+  simulaciones    Simulacion[]
 }
 
 model PlantillaMalla_has_Clase {
@@ -130,6 +132,7 @@ model PlantillaMalla_has_Clase {
   // Requisitos donde ESTA fila es exigida por otra clase.
   esRequisitoDe      Requisito[]          @relation("ClaseEsRequisito")
   planesEstudioClases PlanEstudio_has_PlantillaMalla_has_Clase[]
+  simulacionesClases  Simulacion_has_Clase[]
 
   @@id([idPlantillaMalla_has_Clase, idPlantillaMalla, idClase], map: "PK_PlantillaMalla_has_Clase")
 }
@@ -223,6 +226,7 @@ model Periodo {
 
   historialAcademico HistorialAcademico[]
   inscripciones      Inscripcion[]
+  simulaciones       Simulacion[]
 
   @@unique([anno, periodo], map: "UQ_periodo_anno_periodo")
   @@map("periodo")
@@ -267,6 +271,66 @@ model Inscripcion {
   periodo              Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_Inscripcion_periodo1")
 
   @@unique([idUser, idPlantillaMalla_has_Clase, idperiodo], map: "UQ_Inscripcion_User_Clase_Periodo")
+}
+
+// Tablas nuevas (HU-04-08). Ya aplicadas en el entorno local de desarrollo
+// (db_simula_local); PENDIENTE DE APROBACIÓN para Azure real (ver
+// migrations/proposed/2026-10-01_simulacion.sql). Persisten la
+// estructura de entrada del modelo predictivo (estudiante + período + carga
+// propuesta, contrato v1.0 de docs/modelo-predictivo/03-decisiones-contrato.md)
+// y el resultado que devuelve. Cada "Evaluar carga" genera una fila nueva:
+// es una foto inmutable de la carga en ese momento. Las listas y los bloques
+// del contrato van como JSON en NVARCHAR(MAX).
+model Simulacion {
+  idSimulacion              String    @id(map: "PK_Simulacion") @db.VarChar(45)
+  idUser                    String    @db.VarChar(45)
+  idperiodo                 String    @db.VarChar(45)
+  idPlantillaMalla          String    @db.VarChar(45)
+  estadoPeriodo             String?   @db.VarChar(45)
+  estado                    String    @db.VarChar(45)
+  nivelSugerido             Int?
+  limiteUnidadesValorativas Int
+  totalUnidadesValorativas  Int
+  versionContrato           String    @db.VarChar(45)
+  idSolicitud               String    @unique(map: "UQ_Simulacion_idSolicitud") @db.VarChar(45)
+  fechaSolicitud            DateTime?
+  estudianteModelo          String    @db.NVarChar(Max)
+  historialModelo           String    @db.NVarChar(Max)
+  versionModelo             String?   @db.VarChar(45)
+  probabilidadAprobarTodo   Decimal?  @db.Decimal(5, 4)
+  riesgo                    String?   @db.VarChar(45)
+  observaciones             String?   @db.NVarChar(Max)
+  falla                     String?   @db.VarChar(45)
+  fechaEvaluacion           DateTime?
+  createdAt                 DateTime?
+  updatedAt                 DateTime?
+
+  user           User                   @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Simulacion_User1")
+  periodo        Periodo                @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_Simulacion_periodo1")
+  plantillaMalla PlantillaMalla         @relation(fields: [idPlantillaMalla], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_Simulacion_PlantillaMalla1")
+  clases         Simulacion_has_Clase[]
+}
+
+model Simulacion_has_Clase {
+  idSimulacion               String   @db.VarChar(45)
+  idPlantillaMalla_has_Clase String   @db.VarChar(45)
+  codigoClase                String   @db.VarChar(45)
+  nombreClase                String?  @db.VarChar(100)
+  unidadesValorativas        Int
+  nivel                      Int
+  obligatoria                Boolean
+  origen                     String   @db.VarChar(45)
+  prerrequisitos             String   @db.NVarChar(Max)
+  correquisitos              String   @db.NVarChar(Max)
+  probabilidadAprobacion     Decimal? @db.Decimal(5, 4)
+  riesgo                     String?  @db.VarChar(45)
+  factores                   String?  @db.NVarChar(Max)
+
+  simulacion          Simulacion               @relation(fields: [idSimulacion], references: [idSimulacion], onUpdate: NoAction, map: "fk_Simulacion_has_Clase_Simulacion1")
+  plantillaMallaClase PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Simulacion_has_Clase_PlantillaMalla_has_Clase1")
+
+  @@id([idSimulacion, idPlantillaMalla_has_Clase], map: "PK_Simulacion_has_Clase")
+  @@unique([idSimulacion, codigoClase], map: "UQ_Simulacion_has_Clase_codigo")
 }
 
 model Session {

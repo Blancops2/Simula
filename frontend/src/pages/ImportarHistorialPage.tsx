@@ -60,8 +60,9 @@ export function ImportarHistorialPage() {
         <p>
           Sube un archivo CSV con tu historial de clases cursadas para completarlo de una sola vez, en lugar de
           registrarlas una por una. Cada fila debe tener las columnas <strong>codigo</strong>,{' '}
-          <strong>periodo</strong> (formato AAAA-1 o AAAA-2) y <strong>nota</strong> (0-100). El estado
-          (aprobada o reprobada) se calcula automáticamente: una nota de 65 o más se considera aprobada.
+          <strong>periodo</strong> (formato AAAA-1 o AAAA-2) y <strong>nota</strong> (0-100, o{' '}
+          <strong>NSP</strong> si no te presentaste). El estado (aprobada o reprobada) se calcula automáticamente:
+          una nota de 65 o más se considera aprobada.
         </p>
         <p>
           Esto es un autorreporte: si el administrador ya registró oficialmente una clase, esa fila del CSV se

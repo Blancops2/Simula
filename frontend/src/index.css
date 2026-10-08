@@ -629,6 +629,37 @@ select:focus {
   letter-spacing: 0.04em;
 }
 
+/* Información académica arriba de "Mis inscripciones" */
+/* Va en los azules institucionales para distinguirse de las tablas (blanco/gris). */
+.resumen-academico {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--color-navy-soft);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-navy);
+  border-radius: var(--radius-md);
+  color: var(--color-navy-deep);
+}
+
+.resumen-academico .tree-level-title {
+  color: var(--color-navy-deep);
+}
+
+.resumen-academico-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 16px;
+  row-gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.resumen-academico-grid .field-label {
+  color: var(--color-navy-secondary);
+  font-weight: 600;
+}
+
 /* ==========================================================================
    Tables
    ========================================================================== */
@@ -679,6 +710,48 @@ select:focus {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+/* HU-04-08: resultado de simular la carga inscrita de un período ("Mis
+   inscripciones"). El % por clase va en su columna de la tabla; el % global,
+   las observaciones y los avisos, debajo de la tabla. */
+.simulacion-factores {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.simulacion-resultado {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-subtle);
+  font-size: 13px;
+}
+
+.simulacion-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.simulacion-aviso {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+/* Carga recomendada por el modelo: marca las clases que la propuesta
+   conserva de lo ya inscrito en el período. */
+.reco-inscrita {
+  margin-left: 6px;
 }
 
 /* ==========================================================================
