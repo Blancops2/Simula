@@ -713,8 +713,8 @@ select:focus {
 }
 
 /* HU-04-08: resultado de simular la carga inscrita de un período ("Mis
-   inscripciones"). El % por clase va en su columna de la tabla; el % global,
-   las observaciones y los avisos, debajo de la tabla. */
+   inscripciones"). El resultado (global y por clase, HU-05-07), las
+   observaciones y los avisos van debajo de la tabla del período. */
 .simulacion-factores {
   margin: 4px 0 0;
   padding-left: 16px;
@@ -746,6 +746,81 @@ select:focus {
 .simulacion-aviso {
   margin: 0;
   color: var(--color-text-secondary);
+}
+
+/* HU-05-06: estado de carga y errores de la simulación. */
+.simulacion-en-curso {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.spinner {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: btn-spin 0.6s linear infinite;
+}
+
+.simulacion-error {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.simulacion-error-titulo {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-danger);
+}
+
+/* Qué falta antes de simular (ListaValidaciones), debajo del botón
+   "Simular carga": bloqueantes en rojo, advertencias en amarillo. */
+.validaciones-simulacion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 10px;
+  font-size: 13px;
+}
+
+.validaciones-grupo {
+  padding: 10px 14px;
+  border: 1px solid;
+  border-radius: 8px;
+}
+
+.validaciones-grupo ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.validaciones-bloqueantes {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+}
+
+.validaciones-advertencias {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning);
+}
+
+.validaciones-titulo {
+  margin: 0;
+  font-weight: 600;
+}
+
+.validaciones-donde {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
 /* Carga recomendada por el modelo: marca las clases que la propuesta
@@ -1636,4 +1711,45 @@ select:focus {
     width: auto;
     max-width: none;
   }
+}
+
+/* HU-05-07: resultado de la simulación (ResultadoSimulacion): encabezado con
+   período y fecha, aviso de resultados ilustrativos del mock, tabla por
+   asignatura y acciones para ajustar la carga y volver a simular. */
+.simulacion-encabezado {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.simulacion-titulo {
+  margin: 0;
+  font-size: 14px;
+}
+
+.simulacion-ilustrativa {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--color-warning);
+  border-radius: 6px;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.simulacion-sin-info {
+  color: var(--color-text-secondary);
+}
+
+.simulacion-acciones {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.simulacion-acciones > .tree-node-meta {
+  margin-right: auto;
 }

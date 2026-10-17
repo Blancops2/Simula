@@ -119,6 +119,9 @@ CREATE TABLE periodo (
     fechaFin     DATE        NULL,
     createdAt    DATETIME2   NULL,
     updatedAt    DATETIME2   NULL,
+    -- 1 = período actual (lo marca el admin; solo uno, ver
+    -- UQ_periodo_periodoActual y 2026-10-17_periodo_actual.sql).
+    periodoActual BIT        NOT NULL CONSTRAINT DF_periodo_periodoActual DEFAULT 0,
     CONSTRAINT PK_periodo PRIMARY KEY (idperiodo)
 );
 GO
@@ -346,6 +349,17 @@ GO
 
    Aplicada contra db_simula_local (2026-10-01); PENDIENTE DE APROBACIÓN
    para Azure real (ver backend/prisma/migrations/proposed/2026-10-01_simulacion.sql).
+
+   Trazabilidad: solicitudJson / respuestaJson guardan los cuerpos exactos
+   de ida y vuelta con el modelo, también cuando la respuesta no cumple el
+   contrato. Aplicadas contra db_simula_local (2026-10-17); PENDIENTE DE
+   APROBACIÓN para Azure real (ver 2026-10-17_simulacion_payloads.sql).
+
+   Fallas: "falla" admite también ERROR_INTERNO (error de SIMULA con la fila
+   ya creada) y detalleFalla guarda su precisión ("HTTP 503 ...", "sin
+   respuesta en ... ms", reglas del contrato). Aplicada contra
+   db_simula_local (2026-10-17); PENDIENTE DE APROBACIÓN para Azure real
+   (ver 2026-10-17_simulacion_detalle_falla.sql).
    ----------------------------------------------------------------------- */
 CREATE TABLE Simulacion (
     idSimulacion               VARCHAR(45)   NOT NULL,
@@ -363,10 +377,15 @@ CREATE TABLE Simulacion (
     estudianteModelo           NVARCHAR(MAX) NOT NULL,
     historialModelo            NVARCHAR(MAX) NOT NULL,
     versionModelo              VARCHAR(45)   NULL,
+    origenModelo               VARCHAR(45)   NULL, -- 'mock' | 'modelo' | NULL (ver 2026-10-13_simulacion_origen_modelo.sql)
     probabilidadAprobarTodo    DECIMAL(5,4)  NULL,
     riesgo                     VARCHAR(45)   NULL,
     observaciones              NVARCHAR(MAX) NULL,
     falla                      VARCHAR(45)   NULL,
+    detalleFalla               VARCHAR(255)  NULL, -- precisión de la falla: "HTTP 503 ...", "sin respuesta en ... ms" (ver 2026-10-17_simulacion_detalle_falla.sql)
+    duracionMs                 INT           NULL, -- ms de POST /simulaciones hasta el resultado (ver 2026-10-13_simulacion_duracion.sql)
+    solicitudJson              NVARCHAR(MAX) NULL, -- cuerpo exacto enviado al modelo (ver 2026-10-17_simulacion_payloads.sql)
+    respuestaJson              NVARCHAR(MAX) NULL, -- cuerpo tal cual lo devolvió el modelo (ver 2026-10-17_simulacion_payloads.sql)
     fechaEvaluacion            DATETIME2     NULL,
     createdAt                  DATETIME2     NULL,
     updatedAt                  DATETIME2     NULL,
@@ -406,6 +425,14 @@ GO
 -- de año y período académico.
 ALTER TABLE periodo
     ADD CONSTRAINT UQ_periodo_anno_periodo UNIQUE (anno, periodo);
+GO
+
+-- Un solo período actual (índice filtrado: las filas en 0 no chocan).
+-- Aplicada contra db_simula_local (2026-10-17); PENDIENTE DE APROBACIÓN
+-- para Azure real (ver 2026-10-17_periodo_actual.sql).
+CREATE UNIQUE INDEX UQ_periodo_periodoActual
+    ON periodo (periodoActual)
+    WHERE periodoActual = 1;
 GO
 
 -- Una misma malla no puede tener dos filas de "primer año" / "primer periodo", etc.

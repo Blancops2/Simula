@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simula.unah.hn/contratos/modelo-predictivo/v1.3/solicitud-evaluacion-carga.schema.json",
+  "title": "Solicitud de evaluación de carga (simulación) — contrato v1.3",
+  "description": "Cuerpo de POST {PREDICTIVE_MODEL_URL}/evaluacion-carga que SIMULA envía al motor predictivo (mock o modelo real). Consolida en un solo archivo el contrato v1.0 (docs/modelo-predictivo/01-propuesta-contrato.md §3 y 03-decisiones-contrato.md §4.2) con los cambios de la v1.2 (docs/HU-05-01.md §5.4: avance.indiceAcademico y estado NSP) y la v1.3 (docs/HU-05-03.md: idEstudiante seudonimizado). Tipos TS equivalentes: SolicitudEvaluacionCarga en backend/src/estudiante/modelo-predictivo.contrato.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["versionContrato", "idSolicitud", "fechaSolicitud", "estudiante", "historial", "cargaAcademica"],
+  "properties": {
+    "versionContrato": {
+      "const": "1.3",
+      "description": "Versión del contrato con que se armó la solicitud."
+    },
+    "idSolicitud": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Identificador único de la simulación ante el modelo, generado por SIMULA. Queda guardado en Simulacion.idSolicitud para trazar la petición en ambos lados."
+    },
+    "fechaSolicitud": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Marca de tiempo del envío, ISO 8601 en UTC."
+    },
+    "estudiante": { "$ref": "#/$defs/estudiante" },
+    "historial": {
+      "type": "array",
+      "description": "Todos los intentos del estudiante (aprobadas, reprobadas, NSP, en curso y repeticiones), ordenados por período ascendente. Puede venir vacío según el contrato, aunque HU-05-02 exige al menos un período cursado antes de simular.",
+      "items": { "$ref": "#/$defs/intentoHistorial" }
+    },
+    "cargaAcademica": { "$ref": "#/$defs/cargaAcademica" }
+  },
+  "$defs": {
+    "textoNoVacio": { "type": "string", "minLength": 1 },
+    "textoONulo": { "type": ["string", "null"] },
+    "listaDeCodigos": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/textoNoVacio" }
+    },
+
+    "estudiante": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idEstudiante", "codigoEstudiantil", "carrera", "malla", "nivelSugerido", "avance"],
+      "description": "Perfil académico. No incluye nombre completo ni correo: el modelo no los necesita.",
+      "properties": {
+        "idEstudiante": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "v1.3: seudónimo HMAC-SHA256 (hex) de User.idUser con una clave que solo conoce SIMULA. Es estable para el mismo estudiante, pero no permite recuperar el id ni cruzarlo con otros datos. El patrón rechaza que se envíe el UUID real por error."
+        },
+        "codigoEstudiantil": {
+          "type": "null",
+          "description": "D1 (minimización de datos): el campo sigue en el contrato, pero SIMULA siempre lo envía en null."
+        },
+        "carrera": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "codigo", "nombre"],
+          "properties": {
+            "id": { "$ref": "#/$defs/textoNoVacio" },
+            "codigo": { "$ref": "#/$defs/textoONulo" },
+            "nombre": { "$ref": "#/$defs/textoONulo" }
+          }
+        },
+        "malla": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "nombre", "version"],
+          "properties": {
+            "id": { "$ref": "#/$defs/textoNoVacio" },
+            "nombre": { "$ref": "#/$defs/textoONulo" },
+            "version": { "type": ["integer", "null"] }
+          }
+        },
+        "nivelSugerido": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Nivel máximo entre las obligatorias aprobadas + 1 (1 si no hay ninguna)."
+        },
+        "avance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unidadesValorativasAprobadas",
+            "unidadesValorativasAprobadasObligatorias",
+            "unidadesValorativasTotalesObligatorias",
+            "porcentajeMallaCompletada",
+            "indiceAcademico"
+          ],
+          "properties": {
+            "unidadesValorativasAprobadas": { "type": "integer", "minimum": 0 },
+            "unidadesValorativasAprobadasObligatorias": { "type": "integer", "minimum": 0 },
+            "unidadesValorativasTotalesObligatorias": { "type": "integer", "minimum": 0 },
+            "porcentajeMallaCompletada": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "U.V. obligatorias aprobadas / totales × 100, redondeado."
+            },
+            "indiceAcademico": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 100,
+              "description": "v1.2: Σ(nota × U.V.) / Σ(U.V.) de los intentos aprobados y reprobados, con 2 decimales; null si aún no hay intentos con nota."
+            }
+          }
+        }
+      }
+    },
+
+    "intentoHistorial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigoClase",
+        "nombreClase",
+        "unidadesValorativas",
+        "nivel",
+        "obligatoria",
+        "periodo",
+        "estado",
+        "nota",
+        "origen"
+      ],
+      "properties": {
+        "codigoClase": { "$ref": "#/$defs/textoNoVacio" },
+        "nombreClase": { "$ref": "#/$defs/textoONulo" },
+        "unidadesValorativas": { "type": "integer", "minimum": 0 },
+        "nivel": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Nivel en la malla actual; null si la clase ya no pertenece a ella."
+        },
+        "obligatoria": {
+          "type": ["boolean", "null"],
+          "description": "null si la clase ya no pertenece a la malla actual."
+        },
+        "periodo": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anno", "periodo"],
+          "properties": {
+            "anno": { "$ref": "#/$defs/textoNoVacio" },
+            "periodo": { "$ref": "#/$defs/textoNoVacio" }
+          }
+        },
+        "estado": {
+          "enum": ["APROBADA", "REPROBADA", "EN_CURSO", "NSP"],
+          "description": "v1.2 agrega NSP (se inscribió y no se presentó)."
+        },
+        "nota": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Escala 0–100; null para EN_CURSO, NSP o si no se registró."
+        },
+        "origen": { "enum": ["ADMIN", "AUTOREPORTE"] }
+      },
+      "if": { "properties": { "estado": { "enum": ["EN_CURSO", "NSP"] } } },
+      "then": { "properties": { "nota": { "type": "null" } } }
+    },
+
+    "cargaAcademica": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["periodo", "limiteUnidadesValorativas", "clases", "totalUnidadesValorativas"],
+      "description": "Carga a evaluar. Reglas que JSON Schema no puede expresar y que valida SIMULA: códigos de clase sin repetir y totalUnidadesValorativas = suma de clases[].unidadesValorativas.",
+      "properties": {
+        "periodo": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "anno", "periodo"],
+          "description": "Período seleccionado y confirmado por el estudiante (HU-03-04).",
+          "properties": {
+            "id": { "$ref": "#/$defs/textoNoVacio" },
+            "anno": { "$ref": "#/$defs/textoNoVacio" },
+            "periodo": { "$ref": "#/$defs/textoNoVacio" }
+          }
+        },
+        "limiteUnidadesValorativas": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tope de U.V. por período (hoy 25)."
+        },
+        "clases": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Nunca vacío: con carga vacía SIMULA no llama al modelo.",
+          "items": { "$ref": "#/$defs/claseCarga" }
+        },
+        "totalUnidadesValorativas": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "claseCarga": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigoClase",
+        "nombreClase",
+        "unidadesValorativas",
+        "nivel",
+        "obligatoria",
+        "origen",
+        "prerrequisitos",
+        "correquisitos"
+      ],
+      "properties": {
+        "codigoClase": { "$ref": "#/$defs/textoNoVacio" },
+        "nombreClase": { "$ref": "#/$defs/textoONulo" },
+        "unidadesValorativas": { "type": "integer", "minimum": 0 },
+        "nivel": { "type": "integer", "minimum": 0 },
+        "obligatoria": { "type": "boolean" },
+        "origen": {
+          "enum": ["PROPUESTA", "INSCRITA"],
+          "description": "PROPUESTA: marcada sin inscribir (HU-04-06). INSCRITA: ya en Inscripcion para ese período."
+        },
+        "prerrequisitos": { "$ref": "#/$defs/listaDeCodigos" },
+        "correquisitos": { "$ref": "#/$defs/listaDeCodigos" }
+      }
+    }
+  }
+}

@@ -392,12 +392,14 @@ GO
 --     tablas de este script. Se incluye un periodo futuro deshabilitado
 --     a proposito, para poder probar de inmediato que un periodo
 --     deshabilitado no debe quedar disponible para el estudiante (AC3).
+--     periodoActual: PER-2026-1 es el periodo actual (el mas reciente
+--     habilitado); solo puede haber uno en 1.
 -- =====================================================================
-INSERT INTO periodo (idperiodo, periodo, anno, estado, FechaInicio, fechaFin, createdAt, updatedAt) VALUES
-('PER-2025-1', '1', '2025', 'habilitado',    '2025-01-13', '2025-06-06', SYSDATETIME(), SYSDATETIME()),
-('PER-2025-2', '2', '2025', 'habilitado',    '2025-07-14', '2025-12-05', SYSDATETIME(), SYSDATETIME()),
-('PER-2026-1', '1', '2026', 'habilitado',    '2026-01-12', '2026-06-05', SYSDATETIME(), SYSDATETIME()),
-('PER-2026-2', '2', '2026', 'deshabilitado', '2026-07-13', '2026-12-04', SYSDATETIME(), SYSDATETIME());
+INSERT INTO periodo (idperiodo, periodo, anno, estado, FechaInicio, fechaFin, createdAt, updatedAt, periodoActual) VALUES
+('PER-2025-1', '1', '2025', 'habilitado',    '2025-01-13', '2025-06-06', SYSDATETIME(), SYSDATETIME(), 0),
+('PER-2025-2', '2', '2025', 'habilitado',    '2025-07-14', '2025-12-05', SYSDATETIME(), SYSDATETIME(), 0),
+('PER-2026-1', '1', '2026', 'habilitado',    '2026-01-12', '2026-06-05', SYSDATETIME(), SYSDATETIME(), 1),
+('PER-2026-2', '2', '2026', 'deshabilitado', '2026-07-13', '2026-12-04', SYSDATETIME(), SYSDATETIME(), 0);
 GO
 
 /* =====================================================================

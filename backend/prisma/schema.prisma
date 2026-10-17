@@ -102,9 +102,9 @@ model PlantillaMalla {
   createdAt         DateTime?
   updatedAt         DateTime?
 
-  carrera         Carrera                   @relation(fields: [idCarrera], references: [idCarrera], onUpdate: NoAction, map: "fk_PlantillaMalla_Carrera1")
-  plantillaOrigen PlantillaMalla            @relation("VersionesPlantilla", fields: [plantillaOrigenId], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_PlantillaMalla_PlantillaMalla1")
-  versiones       PlantillaMalla[]          @relation("VersionesPlantilla")
+  carrera         Carrera                    @relation(fields: [idCarrera], references: [idCarrera], onUpdate: NoAction, map: "fk_PlantillaMalla_Carrera1")
+  plantillaOrigen PlantillaMalla             @relation("VersionesPlantilla", fields: [plantillaOrigenId], references: [idPlantillaMalla], onUpdate: NoAction, map: "fk_PlantillaMalla_PlantillaMalla1")
+  versiones       PlantillaMalla[]           @relation("VersionesPlantilla")
   clases          PlantillaMalla_has_Clase[]
   estudiantes     PlantillaMalla_has_User[]
   planesEstudio   PlanEstudio[]
@@ -125,12 +125,12 @@ model PlantillaMalla_has_Clase {
   clase          Clase          @relation(fields: [idClase], references: [idClase], onUpdate: NoAction, map: "fk_PlantillaMalla_has_Clase_Clase1")
   posicion       Posicion       @relation(fields: [Posicion_idPosicion], references: [idPosicion], onUpdate: NoAction, map: "fk_PlantillaMalla_has_Clase_Posicion1")
 
-  historialAcademico HistorialAcademico[]
-  inscripciones      Inscripcion[]
+  historialAcademico  HistorialAcademico[]
+  inscripciones       Inscripcion[]
   // Requisitos donde ESTA fila es la clase que exige algo.
-  requisitosPropios  Requisito[]          @relation("ClaseConRequisito")
+  requisitosPropios   Requisito[]                                @relation("ClaseConRequisito")
   // Requisitos donde ESTA fila es exigida por otra clase.
-  esRequisitoDe      Requisito[]          @relation("ClaseEsRequisito")
+  esRequisitoDe       Requisito[]                                @relation("ClaseEsRequisito")
   planesEstudioClases PlanEstudio_has_PlantillaMalla_has_Clase[]
   simulacionesClases  Simulacion_has_Clase[]
 
@@ -139,11 +139,11 @@ model PlantillaMalla_has_Clase {
 
 model Requisito {
   idRequisito                String    @id(map: "PK_Requisito") @db.VarChar(45)
-  tipoRequisito               String?   @db.VarChar(1)
-  createdAt                   DateTime?
-  updatedAt                   DateTime?
-  idPlantillaMalla_has_Clase  String    @db.VarChar(45)
-  idClaseRequisito             String    @db.VarChar(45)
+  tipoRequisito              String?   @db.VarChar(1)
+  createdAt                  DateTime?
+  updatedAt                  DateTime?
+  idPlantillaMalla_has_Clase String    @db.VarChar(45)
+  idClaseRequisito           String    @db.VarChar(45)
 
   clase     PlantillaMalla_has_Clase @relation("ClaseConRequisito", fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase1")
   requisito PlantillaMalla_has_Clase @relation("ClaseEsRequisito", fields: [idClaseRequisito], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Requisito_PlantillaMalla_has_Clase2")
@@ -203,9 +203,9 @@ model HistorialAcademico {
   idPlantillaMalla_has_Clase String    @db.VarChar(45)
   idperiodo                  String    @db.VarChar(45)
 
-  user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
-  plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_HistorialAcademico_PlantillaMalla_has_Clase1")
-  periodo              Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_HistorialAcademico_periodo1")
+  user                User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
+  plantillaMallaClase PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_HistorialAcademico_PlantillaMalla_has_Clase1")
+  periodo             Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_HistorialAcademico_periodo1")
 }
 
 // Tabla nueva (HU-03-03). Ya aplicada en el entorno local de desarrollo
@@ -215,14 +215,18 @@ model HistorialAcademico {
 // habilitados quedan disponibles para consulta/selección del estudiante
 // (HU1/HU2) y para simulaciones (HU-03-04).
 model Periodo {
-  idperiodo   String    @id(map: "PK_periodo") @db.VarChar(45)
-  periodo     String?   @db.VarChar(45)
-  anno        String?   @db.VarChar(45)
-  estado      String?   @db.VarChar(45)
-  FechaInicio DateTime? @db.Date
-  fechaFin    DateTime? @db.Date
-  createdAt   DateTime?
-  updatedAt   DateTime?
+  idperiodo     String    @id(map: "PK_periodo") @db.VarChar(45)
+  periodo       String?   @db.VarChar(45)
+  anno          String?   @db.VarChar(45)
+  estado        String?   @db.VarChar(45)
+  FechaInicio   DateTime? @db.Date
+  fechaFin      DateTime? @db.Date
+  createdAt     DateTime?
+  updatedAt     DateTime?
+  // Período actual, lo marca el admin (PATCH /periodos/:id/actual). Solo
+  // uno: índice único filtrado UQ_periodo_periodoActual, que Prisma no
+  // modela (ver migrations/proposed/2026-10-17_periodo_actual.sql).
+  periodoActual Boolean   @default(false, map: "DF_periodo_periodoActual")
 
   historialAcademico HistorialAcademico[]
   inscripciones      Inscripcion[]
@@ -260,15 +264,15 @@ model Auditoria {
 // HistorialAcademico) en vez de guardar "periodo" como texto libre sin
 // validar contra ningún catálogo ni estado habilitado/deshabilitado.
 model Inscripcion {
-  idInscripcion               String    @id(map: "PK_Inscripcion") @db.VarChar(45)
-  idUser                      String    @db.VarChar(45)
-  idPlantillaMalla_has_Clase  String    @db.VarChar(45)
-  idperiodo                   String    @db.VarChar(45)
-  createdAt                   DateTime?
+  idInscripcion              String    @id(map: "PK_Inscripcion") @db.VarChar(45)
+  idUser                     String    @db.VarChar(45)
+  idPlantillaMalla_has_Clase String    @db.VarChar(45)
+  idperiodo                  String    @db.VarChar(45)
+  createdAt                  DateTime?
 
-  user                 User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Inscripcion_User1")
-  plantillaMallaClase  PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Inscripcion_PlantillaMalla_has_Clase1")
-  periodo              Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_Inscripcion_periodo1")
+  user                User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_Inscripcion_User1")
+  plantillaMallaClase PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_Inscripcion_PlantillaMalla_has_Clase1")
+  periodo             Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_Inscripcion_periodo1")
 
   @@unique([idUser, idPlantillaMalla_has_Clase, idperiodo], map: "UQ_Inscripcion_User_Clase_Periodo")
 }
@@ -297,10 +301,15 @@ model Simulacion {
   estudianteModelo          String    @db.NVarChar(Max)
   historialModelo           String    @db.NVarChar(Max)
   versionModelo             String?   @db.VarChar(45)
+  origenModelo              String?   @db.VarChar(45)
   probabilidadAprobarTodo   Decimal?  @db.Decimal(5, 4)
   riesgo                    String?   @db.VarChar(45)
   observaciones             String?   @db.NVarChar(Max)
   falla                     String?   @db.VarChar(45)
+  detalleFalla              String?   @db.VarChar(255)
+  duracionMs                Int?
+  solicitudJson             String?   @db.NVarChar(Max)
+  respuestaJson             String?   @db.NVarChar(Max)
   fechaEvaluacion           DateTime?
   createdAt                 DateTime?
   updatedAt                 DateTime?

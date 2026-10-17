@@ -10,6 +10,7 @@ import { PeriodosPage } from '../pages/PeriodosPage';
 import { PlanEstudioPage } from '../pages/PlanEstudioPage';
 import { PlantillasPage } from '../pages/PlantillasPage';
 import { SeleccionClasesPage } from '../pages/SeleccionClasesPage';
+import { SimulacionesAnterioresPage } from '../pages/SimulacionesAnterioresPage';
 import { StudentDashboard } from '../pages/StudentDashboard';
 import { ProtectedRoute } from './ProtectedRoute';
 
@@ -23,6 +24,7 @@ export function AppRouter() {
         <Route path="/estudiante/historial" element={<HistorialPage />} />
         <Route path="/estudiante/historial/importar" element={<ImportarHistorialPage />} />
         <Route path="/estudiante/malla" element={<SeleccionClasesPage />} />
+        <Route path="/estudiante/simulaciones" element={<SimulacionesAnterioresPage />} />
         <Route path="/estudiante/pensum" element={<PensumPage />} />
         <Route path="/estudiante/plan-estudio" element={<EstudiantePlanEstudioPage />} />
       </Route>

@@ -2,7 +2,7 @@
 
 El modelo predictivo real se construye **fuera de SIMULA**; el aplicativo solo lo consume por HTTP. Este mock simula ese servicio mientras el modelo real no está listo, para probar el backend y la pantalla de inscripción de punta a punta.
 
-- Implementa el contrato **v1.1** ([docs/modelo-predictivo/03-decisiones-contrato.md](../docs/modelo-predictivo/03-decisiones-contrato.md) + [05-recomendacion-carga.md](../docs/modelo-predictivo/05-recomendacion-carga.md)): `POST /v1/recomendaciones` y `POST /v1/evaluacion-carga`. Solo acepta `versionContrato: "1.1"`.
+- Implementa el contrato **v1.1** ([docs/modelo-predictivo/03-decisiones-contrato.md](../docs/modelo-predictivo/03-decisiones-contrato.md) + [05-recomendacion-carga.md](../docs/modelo-predictivo/05-recomendacion-carga.md)): `POST /v1/recomendaciones` y `POST /v1/evaluacion-carga`. Actualizado al contrato **v1.3** (índice académico y estado NSP de la v1.2, `idEstudiante` seudonimizado de la v1.3; esquema en [backend/src/estudiante/contrato-v1.3/](../backend/src/estudiante/contrato-v1.3/)). Solo acepta `versionContrato: "1.3"`.
 - Las probabilidades salen de una heurística simple y determinista (misma petición → misma respuesta). **No son predicciones reales.**
 - Sin dependencias: un solo archivo, Node ≥ 18. No forma parte del build del backend ni del frontend.
 
@@ -30,6 +30,10 @@ Reiniciar el backend. Para volver al fallback local, dejar `PREDICTIVE_MODEL_URL
 | `MOCK_MAX_RECOMENDACIONES` | `5` | Máximo de clases recomendadas. |
 | `MOCK_DEMORA_TIMEOUT_MS` | `5000` | Demora del escenario `timeout` (debe superar `PREDICTIVE_MODEL_TIMEOUT_MS`). |
 
+### Prueba de integración
+
+`backend/src/estudiante/motor-predictivo.integracion.spec.ts` (corre con `npm test` en `backend/`) levanta este servidor en un puerto libre y ejecuta el flujo de simulación contra él y contra un stub del API real, cambiando solo `PREDICTIVE_MODEL_URL`. Un cambio aquí que rompa el contrato v1.3 hace fallar esa prueba.
+
 ## Escenarios de prueba
 
 Para ver cómo reacciona SIMULA ante fallas del modelo:
@@ -42,8 +46,8 @@ Para ver cómo reacciona SIMULA ante fallas del modelo:
 | `carrera_no_soportada` | 422 `CARRERA_NO_SOPORTADA` | Evaluación: "El modelo predictivo todavía no cubre tu carrera." |
 | `limite_excedido` | 429 con `Retry-After` | "No disponible". |
 | `error_interno` | 500 `ERROR_INTERNO` | "No disponible". |
-| `timeout` | 200 tras `MOCK_DEMORA_TIMEOUT_MS` | "No disponible" (el backend aborta por timeout). |
-| `respuesta_malformada` | 200 sin la forma del contrato | "No disponible". |
+| `timeout` | 200 tras `MOCK_DEMORA_TIMEOUT_MS` | Simulación: "Tiempo de espera excedido" con Reintentar (el backend aborta y responde `TIEMPO_EXCEDIDO`). |
+| `respuesta_malformada` | 200 sin la forma del contrato | Simulación: "Error inesperado" con Reintentar (`RESPUESTA_INVALIDA`). |
 | `codigos_fuera_de_lista` | 200 con un código `XX-999` extra | Recomendación "no disponible" (v1.1: el backend invalida la respuesta completa). |
 
 Cambiar el escenario sin reiniciar (afecta a todas las peticiones siguientes, incluidas las que hace el backend):

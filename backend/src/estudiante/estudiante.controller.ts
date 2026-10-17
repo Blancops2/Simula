@@ -19,6 +19,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
+import { ListarSimulacionesDto } from './dto/listar-simulaciones.dto';
 import { SimularCargaDto } from './dto/simular-carga.dto';
 import { InscribirClasesDto } from './dto/inscribir-clases.dto';
 import { EstudianteService } from './estudiante.service';
@@ -102,14 +103,34 @@ export class EstudianteController {
     return this.estudiante.obtenerRecomendacionPeriodo(user.userId, user);
   }
 
+  // Declarada antes de simulaciones/:id para que "validacion" no se tome como id.
+  @Get('simulaciones/validacion')
+  @ApiOperation({
+    summary:
+      'Validaciones previas a simular la carga inscrita en el período: todas las que fallan, cada una con `tipo` (`BLOQUEANTE` impide simular, `ADVERTENCIA` solo informa), un mensaje específico de qué falta y dónde corregirlo. `puedeSimular` es false si hay al menos una bloqueante. `POST /estudiante/simulaciones` aplica las mismas reglas.',
+  })
+  @ApiQuery({ name: 'periodoId', required: false, description: 'Período cuya carga inscrita se va a simular.' })
+  validarSimulacion(@CurrentUser() user: RequestUser, @Query('periodoId') periodoId?: string) {
+    return this.estudiante.validarSimulacion(user.userId, periodoId || undefined);
+  }
+
   // 201: cada llamada crea una simulación nueva (tabla Simulacion).
   @Post('simulaciones')
   @ApiOperation({
     summary:
-      'Simula con el modelo predictivo (HU-04-08) la carga INSCRITA del estudiante en el período: genera y persiste la estructura de entrada (estudiante, período, clases) y la evalúa: probabilidad de aprobar toda la carga y cada clase, con el riesgo calculado por SIMULA. `disponible: false` (con `falla`) si el modelo no está configurado o no respondió; la simulación queda guardada igual. `400` si el período no está habilitado o no hay clases inscritas en él.',
+      'Simula con el modelo predictivo (HU-04-08) la carga INSCRITA del estudiante en el período: genera y persiste la estructura de entrada (estudiante, período, clases) y la evalúa: probabilidad de aprobar toda la carga y cada clase, con el riesgo calculado por SIMULA. `disponible: false` (con `falla`) si el modelo no está configurado o no respondió; la simulación queda guardada igual. `400` con `{ message, validaciones }` (las mismas de `GET /estudiante/simulaciones/validacion`) si hay al menos una validación bloqueante.',
   })
   simular(@CurrentUser() user: RequestUser, @Body() dto: SimularCargaDto) {
-    return this.estudiante.simular(user.userId, dto.periodoId, user);
+    return this.estudiante.simular(user.userId, dto.periodoId || undefined, user);
+  }
+
+  @Get('simulaciones')
+  @ApiOperation({
+    summary:
+      'Últimas simulaciones del estudiante autenticado en el período actual (el que el administrador marcó con `periodoActual`), de la más reciente a la más antigua, con un resumen de cada una (carga, resultado o motivo de la falla, origen). Incluye las fallidas. `periodo: null` y lista vacía si no hay período actual. El detalle completo está en `GET /estudiante/simulaciones/:id`.',
+  })
+  listarSimulaciones(@CurrentUser() user: RequestUser, @Query() dto: ListarSimulacionesDto) {
+    return this.estudiante.listarSimulacionesPeriodoActual(user.userId, dto.limite);
   }
 
   @Get('simulaciones/:id')

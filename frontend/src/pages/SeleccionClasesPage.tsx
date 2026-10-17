@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   cancelarInscripcion,
   getInscripciones,
@@ -9,18 +10,24 @@ import {
   getResumenAcademico,
   inscribirClases,
   simularCarga,
+  validarSimulacion,
 } from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
+import { AvisoErrorSimulacion, SimulacionDescartada, SimulacionEnCurso } from '../components/simulacion/EstadoSimulacion';
+import { ListaValidaciones } from '../components/simulacion/ListaValidaciones';
+import { porcentaje, ResultadoSimulacion, RIESGO_UI } from '../components/simulacion/ResultadoSimulacion';
+import { errorDeExcepcion, errorDeFalla, type ErrorSimulacion } from '../estudiante/errorSimulacion';
 import type {
   FallaPrediccion,
   InscripcionItem,
   MallaConEstado,
-  NivelRiesgo,
   PeriodoDisponible,
   RecomendacionClases,
   RecomendacionPeriodo,
   ResumenAcademico,
   SimulacionCarga,
+  ValidacionSimulacion,
+  ValidacionSimulacionItem,
 } from '../estudiante/types';
 
 // HU-03-04: tope de unidades valorativas por matrícula. Cuenta tanto lo que
@@ -37,35 +44,44 @@ function etiquetaPeriodo(p: { anno: string; periodo: string }): string {
   return `${p.anno} - Período ${p.periodo}`;
 }
 
-const RIESGO_UI: Record<NivelRiesgo, { etiqueta: string; badge: string }> = {
-  BAJO: { etiqueta: 'Riesgo bajo', badge: 'badge-success' },
-  MEDIO: { etiqueta: 'Riesgo medio', badge: 'badge-warning' },
-  ALTO: { etiqueta: 'Riesgo alto', badge: 'badge-danger' },
-};
-
-const MENSAJE_FALLA_SIMULACION: Record<FallaPrediccion, string> = {
-  NO_CONFIGURADO: 'La simulación con el modelo predictivo todavía no está disponible.',
-  CARRERA_NO_SOPORTADA: 'El modelo predictivo todavía no cubre tu carrera.',
-  NO_DISPONIBLE: 'No se pudo simular la carga en este momento. Intenta de nuevo más tarde.',
-};
-
 const MENSAJE_FALLA_RECOMENDACION: Record<FallaPrediccion, string> = {
   NO_CONFIGURADO: 'La recomendación del modelo predictivo todavía no está disponible.',
   CARRERA_NO_SOPORTADA: 'El modelo predictivo todavía no cubre tu carrera.',
+  // La recomendación no se valida contra un esquema; se deja por completitud del tipo.
+  SOLICITUD_INVALIDA: 'No se pudo obtener la recomendación en este momento. Intenta de nuevo más tarde.',
+  RESPUESTA_INVALIDA:
+    'El modelo predictivo respondió con datos que no se pudieron interpretar. Intenta de nuevo más tarde.',
+  TIEMPO_EXCEDIDO: 'El modelo predictivo tardó demasiado en responder. Intenta de nuevo más tarde.',
   NO_DISPONIBLE: 'No se pudo obtener la recomendación en este momento. Intenta de nuevo más tarde.',
 };
 
 // HU-04-08: estado de la simulación de un período. `firma` = inscripciones
-// del período con que se pidió (ver `inscripcionesPorPeriodo`).
+// del período con que se pidió (ver `inscripcionesPorPeriodo`). `intento`
+// identifica la petición (HU-05-06): solo la última de cada período puede
+// escribir su resultado.
 interface SimulacionPeriodoUI {
+  intento: number;
   firma: string;
   cargando: boolean;
   resultado: SimulacionCarga | null;
-  error: string | null;
+  error: ErrorSimulacion | null;
 }
 
-function porcentaje(probabilidad: number): string {
-  return `${Math.round(probabilidad * 100)}%`;
+// Validaciones previas a simular un período (qué falta antes de simular),
+// atadas a la misma firma que la simulación: al inscribir o cancelar una
+// clase se vuelven a pedir.
+interface ValidacionPeriodoUI {
+  firma: string;
+  cargando: boolean;
+  resultado: ValidacionSimulacion | null;
+  error: boolean;
+}
+
+// El 400 de POST /simulaciones trae la lista completa de validaciones
+// (algo cambió entre la validación previa y el clic).
+function validacionesDeError(err: unknown): ValidacionSimulacionItem[] | null {
+  const validaciones = (err as { response?: { data?: { validaciones?: unknown } } })?.response?.data?.validaciones;
+  return Array.isArray(validaciones) ? (validaciones as ValidacionSimulacionItem[]) : null;
 }
 
 // Normaliza para comparar sin distinguir mayúsculas/minúsculas ni acentos
@@ -107,6 +123,13 @@ export function SeleccionClasesPage() {
   // cancela una clase de ese período, deja de coincidir y el resultado (o
   // uno que llegue tarde) ya no se muestra.
   const [simulaciones, setSimulaciones] = useState<Record<string, SimulacionPeriodoUI>>({});
+  // HU-05-06: el botón se deshabilita en el siguiente render, pero un doble
+  // clic rápido llega antes; este candado (por período y carga) lo frena de
+  // inmediato. Una carga distinta sí puede simularse aunque la anterior siga
+  // en curso: el resultado de la anterior se descarta.
+  const simulacionesEnCursoRef = useRef(new Set<string>());
+  const ultimoIntentoRef = useRef(0);
+  const [validacionesSim, setValidacionesSim] = useState<Record<string, ValidacionPeriodoUI>>({});
   // Información académica que usará la simulación (carrera, U.V. aprobadas,
   // índice). El backend la calcula del historial en cada consulta; se pide
   // al abrir la ventana de inscripción y aparte de la carga inicial, para que
@@ -197,10 +220,6 @@ export function SeleccionClasesPage() {
       .map((g) => ({ ...g, firma: g.items.map((i) => i.id).sort().join('|') }))
       .sort((a, b) => b.periodo.localeCompare(a.periodo));
   }, [inscripciones]);
-
-  // Solo se puede simular sobre un período habilitado (el backend lo
-  // revalida); getPeriodosDisponibles devuelve justamente esos.
-  const periodosHabilitados = useMemo(() => new Set(periodos.map((p) => p.id)), [periodos]);
 
   const inscripcionPorClaseId = useMemo(() => {
     const mapa = new Map<string, InscripcionItem>();
@@ -333,19 +352,80 @@ export function SeleccionClasesPage() {
   }, [seleccion, periodoId]);
 
   // HU-04-08: el backend toma las inscripciones del período desde la BD,
-  // así que solo se manda el período. La respuesta se guarda solo si la
-  // simulación en curso para ese período sigue siendo la misma firma.
+  // así que solo se manda el período. La respuesta se guarda solo si sigue
+  // siendo el último intento de ese período, y se muestra solo si su firma
+  // coincide con la carga inscrita actual (HU-05-06: si el estudiante
+  // inscribe o cancela mientras corre, el resultado se descarta).
   const simularPeriodo = useCallback(async (idPeriodo: string, firma: string) => {
-    const guardar = (estado: SimulacionPeriodoUI) =>
-      setSimulaciones((prev) => (prev[idPeriodo]?.firma === firma ? { ...prev, [idPeriodo]: estado } : prev));
-    setSimulaciones((prev) => ({ ...prev, [idPeriodo]: { firma, cargando: true, resultado: null, error: null } }));
+    const clave = `${idPeriodo}|${firma}`;
+    if (simulacionesEnCursoRef.current.has(clave)) {
+      return;
+    }
+    simulacionesEnCursoRef.current.add(clave);
+    const intento = ++ultimoIntentoRef.current;
+    const guardar = (estado: Pick<SimulacionPeriodoUI, 'resultado' | 'error'>) =>
+      setSimulaciones((prev) =>
+        prev[idPeriodo]?.intento === intento
+          ? { ...prev, [idPeriodo]: { intento, firma, cargando: false, ...estado } }
+          : prev,
+      );
+    setSimulaciones((prev) => ({
+      ...prev,
+      [idPeriodo]: { intento, firma, cargando: true, resultado: null, error: null },
+    }));
     try {
       const resultado = await simularCarga(idPeriodo);
-      guardar({ firma, cargando: false, resultado, error: null });
+      guardar({ resultado, error: null });
     } catch (err) {
-      guardar({ firma, cargando: false, resultado: null, error: errorMessage(err, 'No se pudo simular la carga.') });
+      const validaciones = validacionesDeError(err);
+      if (validaciones) {
+        // Se muestran en la misma lista de debajo del botón, que queda
+        // deshabilitado, en vez de como un error suelto.
+        guardar({ resultado: null, error: null });
+        setValidacionesSim((prev) =>
+          prev[idPeriodo]?.firma === firma
+            ? { ...prev, [idPeriodo]: { firma, cargando: false, resultado: { puedeSimular: false, validaciones }, error: false } }
+            : prev,
+        );
+        return;
+      }
+      guardar({ resultado: null, error: errorDeExcepcion(err) });
+    } finally {
+      simulacionesEnCursoRef.current.delete(clave);
     }
   }, []);
+
+  // HU-05-07: "Modificar carga" desde el resultado lleva al catálogo (para
+  // inscribir más) con el foco en la búsqueda; cancelar se hace en la tabla
+  // del período. Cualquier cambio cambia la firma y habilita simular de nuevo.
+  const catalogoRef = useRef<HTMLElement>(null);
+  const irAModificarCarga = useCallback(() => {
+    catalogoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('busqueda-catalogo')?.focus({ preventScroll: true });
+  }, []);
+
+  const validarPeriodo = useCallback(async (idPeriodo: string, firma: string) => {
+    const guardar = (estado: ValidacionPeriodoUI) =>
+      setValidacionesSim((prev) => (prev[idPeriodo]?.firma === firma ? { ...prev, [idPeriodo]: estado } : prev));
+    setValidacionesSim((prev) => ({ ...prev, [idPeriodo]: { firma, cargando: true, resultado: null, error: false } }));
+    try {
+      const resultado = await validarSimulacion(idPeriodo);
+      guardar({ firma, cargando: false, resultado, error: false });
+    } catch {
+      guardar({ firma, cargando: false, resultado: null, error: true });
+    }
+  }, []);
+
+  // Cada período con inscripciones se valida al cargar y cada vez que cambia
+  // su carga inscrita (firma), para que el botón y los mensajes de debajo
+  // estén al día sin esperar a que el estudiante pulse "Simular carga".
+  useEffect(() => {
+    inscripcionesPorPeriodo.forEach((g) => {
+      if (validacionesSim[g.periodoId]?.firma !== g.firma) {
+        validarPeriodo(g.periodoId, g.firma);
+      }
+    });
+  }, [inscripcionesPorPeriodo, validacionesSim, validarPeriodo]);
 
   // El <select> aplica el período directamente, sin paso de confirmación
   // intermedio: antes existía un botón "Cambiar período" separado, pero
@@ -405,7 +485,7 @@ export function SeleccionClasesPage() {
       {mensajeExito && <p className="page-success">{mensajeExito}</p>}
 
       {malla && (
-        <section className="panel">
+        <section className="panel" ref={catalogoRef}>
           <div className="panel-header">
             <div>
               <h2>Catálogo de asignaturas</h2>
@@ -725,10 +805,26 @@ export function SeleccionClasesPage() {
             // inscrita actual del período (misma firma).
             const simulacion = simulaciones[grupo.periodoId];
             const vigente = simulacion && simulacion.firma === grupo.firma ? simulacion : null;
+            // HU-05-06: hubo una simulación (en curso o terminada) de una
+            // carga que ya no es la inscrita; su resultado no se muestra.
+            const descartada =
+              !!simulacion &&
+              !vigente &&
+              (simulacion.cargando || simulacion.resultado !== null || simulacion.error !== null);
             const evaluada = vigente?.resultado?.disponible ? vigente.resultado : null;
-            // Se cruza por código: si la inscripción apunta a otra versión
-            // de la malla, el backend la simula con la clase de la malla actual.
-            const evaluacionPorCodigo = new Map((evaluada?.clases ?? []).map((c) => [c.codigo, c]));
+            const errorSimulacion =
+              vigente && !vigente.cargando
+                ? (vigente.error ??
+                  (vigente.resultado && !vigente.resultado.disponible
+                    ? errorDeFalla(vigente.resultado.falla ?? 'NO_DISPONIBLE')
+                    : null))
+                : null;
+            // Sin validación vigente (cargando, fallida o de otra firma) no
+            // se deja simular: el botón solo se habilita con todo en verde.
+            const validacionSim = validacionesSim[grupo.periodoId];
+            const validacion = validacionSim && validacionSim.firma === grupo.firma ? validacionSim : null;
+            const bloqueado = !validacion?.resultado?.puedeSimular;
+            const simularDeshabilitado = bloqueado || !!vigente?.cargando || cancelandoId !== null;
             return (
               <div key={grupo.periodoId} className="tree-level">
                 <div className="tree-level-header">
@@ -739,17 +835,27 @@ export function SeleccionClasesPage() {
                   <span className={`badge ${grupo.totalUv >= MAX_UNIDADES_VALORATIVAS ? 'badge-warning' : 'badge-neutral'}`}>
                     Unidades valorativas: {grupo.totalUv} / {MAX_UNIDADES_VALORATIVAS}
                   </span>
-                  {periodosHabilitados.has(grupo.periodoId) && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => simularPeriodo(grupo.periodoId, grupo.firma)}
-                      disabled={vigente?.cargando || cancelandoId !== null}
-                    >
-                      {vigente?.cargando ? 'Simulando…' : 'Simular carga'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => simularPeriodo(grupo.periodoId, grupo.firma)}
+                    disabled={simularDeshabilitado}
+                    aria-busy={!!vigente?.cargando}
+                    title={bloqueado && validacion?.resultado ? 'Resuelve lo indicado debajo para poder simular.' : undefined}
+                  >
+                    {!validacion || validacion.cargando
+                      ? 'Verificando…'
+                      : vigente?.cargando
+                        ? 'Simulando…'
+                        : 'Simular carga'}
+                  </button>
                 </div>
+                {validacion?.error && (
+                  <p className="simulacion-aviso">
+                    No se pudo verificar si la carga está lista para simular. Recarga la página.
+                  </p>
+                )}
+                {validacion?.resultado && <ListaValidaciones validaciones={validacion.resultado.validaciones} />}
                 <div className="table-scroll">
                   <table className="data-table">
                     <thead>
@@ -759,13 +865,11 @@ export function SeleccionClasesPage() {
                         <th>Nivel</th>
                         <th>U.V.</th>
                         <th>Tipo</th>
-                        {evaluada && <th>Probabilidad de aprobar</th>}
                         <th>Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
                       {grupo.items.map((i) => {
-                        const evaluacionClase = evaluacionPorCodigo.get(i.clase.codigo);
                         return (
                           <tr key={i.id}>
                             <td>{i.clase.codigo}</td>
@@ -773,27 +877,6 @@ export function SeleccionClasesPage() {
                             <td>{i.clase.nivel}</td>
                             <td>{i.clase.unidadesValorativas}</td>
                             <td>{i.clase.tipo === 'OBLIGATORIA' ? 'Obligatoria' : 'Electiva'}</td>
-                            {evaluada && (
-                              <td>
-                                {evaluacionClase ? (
-                                  <>
-                                    <span className={`badge ${RIESGO_UI[evaluacionClase.riesgo].badge}`}>
-                                      {porcentaje(evaluacionClase.probabilidadAprobacion)} ·{' '}
-                                      {RIESGO_UI[evaluacionClase.riesgo].etiqueta}
-                                    </span>
-                                    {evaluacionClase.factores.length > 0 && (
-                                      <ul className="simulacion-factores">
-                                        {evaluacionClase.factores.map((f) => (
-                                          <li key={f}>{f}</li>
-                                        ))}
-                                      </ul>
-                                    )}
-                                  </>
-                                ) : (
-                                  '—'
-                                )}
-                              </td>
-                            )}
                             <td className="table-actions">
                               <button
                                 type="button"
@@ -810,38 +893,41 @@ export function SeleccionClasesPage() {
                     </tbody>
                   </table>
                 </div>
-                {vigente && !vigente.cargando && (
-                  <div className="simulacion-resultado" aria-live="polite">
-                    {vigente.error ? (
-                      <p className="simulacion-aviso">{vigente.error}</p>
-                    ) : vigente.resultado && !vigente.resultado.disponible ? (
-                      <p className="simulacion-aviso">
-                        {MENSAJE_FALLA_SIMULACION[vigente.resultado.falla ?? 'NO_DISPONIBLE']}
-                      </p>
-                    ) : evaluada && evaluada.probabilidadAprobarTodo !== null && evaluada.riesgo ? (
-                      <>
-                        <div className="simulacion-total">
-                          <span>Probabilidad de aprobar toda la carga</span>
-                          <span className={`badge ${RIESGO_UI[evaluada.riesgo].badge}`}>
-                            {porcentaje(evaluada.probabilidadAprobarTodo)} · {RIESGO_UI[evaluada.riesgo].etiqueta}
-                          </span>
-                        </div>
-                        {evaluada.observaciones.length > 0 && (
-                          <ul className="simulacion-factores">
-                            {evaluada.observaciones.map((o) => (
-                              <li key={o}>{o}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </>
-                    ) : null}
-                  </div>
-                )}
+                {/* Siempre presente, para que los cambios de estado se anuncien. */}
+                <div aria-live="polite">
+                  {vigente?.cargando ? (
+                    <SimulacionEnCurso />
+                  ) : errorSimulacion ? (
+                    <AvisoErrorSimulacion
+                      error={errorSimulacion}
+                      onReintentar={() => simularPeriodo(grupo.periodoId, grupo.firma)}
+                      reintentoDeshabilitado={simularDeshabilitado}
+                    />
+                  ) : descartada ? (
+                    <SimulacionDescartada />
+                  ) : evaluada ? (
+                    <ResultadoSimulacion
+                      simulacion={evaluada}
+                      onSimularDeNuevo={() => simularPeriodo(grupo.periodoId, grupo.firma)}
+                      simularDeshabilitado={simularDeshabilitado}
+                      onModificarCarga={irAModificarCarga}
+                    />
+                  ) : null}
+                </div>
               </div>
             );
           })}
         </section>
       )}
+
+      {/* Trazabilidad (criterio 4): acceso a las simulaciones anteriores del
+          período actual, al final de la página. */}
+      <section className="panel">
+        <p className="tree-node-meta">Puedes ver las simulaciones que hayas hecho anteriormente en el período actual.</p>
+        <Link to="/estudiante/simulaciones" className="btn btn-secondary">
+          Ver simulaciones anteriores
+        </Link>
+      </section>
 
       {/* HU-04-06: panel flotante con la carga propuesta (asignaturas
           marcadas, aún sin confirmar) — visible solo mientras hay al menos

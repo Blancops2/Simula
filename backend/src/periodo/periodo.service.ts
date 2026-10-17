@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { RequestUser } from '../auth/decorators/current-user.decorator';
 import { EstadoPeriodo } from '../common/enums';
@@ -14,6 +14,7 @@ export interface PeriodoView {
   estado: string;
   fechaInicio: Date | null;
   fechaFin: Date | null;
+  periodoActual: boolean;
 }
 
 @Injectable()
@@ -82,6 +83,12 @@ export class PeriodoService {
     if (actual.estado === dto.estado) {
       return this.toView(actual);
     }
+    // El período actual tiene que seguir disponible para el estudiante.
+    if (actual.periodoActual && dto.estado !== EstadoPeriodo.HABILITADO) {
+      throw new BadRequestException(
+        'No se puede deshabilitar el período actual: marca otro período como actual primero.',
+      );
+    }
 
     const actualizado = await this.prisma.$transaction(async (tx) => {
       const periodo = await tx.periodo.update({
@@ -101,6 +108,58 @@ export class PeriodoService {
           idUser: currentUser.userId,
           createdAt: new Date(),
         },
+      });
+      return periodo;
+    });
+
+    return this.toView(actualizado);
+  }
+
+  // Marca el período actual (criterio 4 de trazabilidad: el estudiante
+  // consulta sus simulaciones del período actual). Solo hay uno: el anterior
+  // se desmarca en la misma transacción (la BD lo garantiza también con
+  // UQ_periodo_periodoActual). Tiene que estar habilitado. Cada cambio queda
+  // en Auditoria, igual que el de estado.
+  async marcarActual(id: string, currentUser: RequestUser): Promise<PeriodoView> {
+    const nuevo = await this.prisma.periodo.findUnique({ where: { idperiodo: id } });
+    if (!nuevo) {
+      throw new NotFoundException('El período indicado no existe.');
+    }
+    if (nuevo.periodoActual) {
+      return this.toView(nuevo);
+    }
+    if (nuevo.estado !== EstadoPeriodo.HABILITADO) {
+      throw new BadRequestException('Solo un período habilitado puede ser el período actual.');
+    }
+
+    const actualizado = await this.prisma.$transaction(async (tx) => {
+      const anterior = await tx.periodo.findFirst({ where: { periodoActual: true } });
+      const ahora = new Date();
+      if (anterior) {
+        await tx.periodo.update({
+          where: { idperiodo: anterior.idperiodo },
+          data: { periodoActual: false, updatedAt: ahora },
+        });
+      }
+      const periodo = await tx.periodo.update({
+        where: { idperiodo: id },
+        data: { periodoActual: true, updatedAt: ahora },
+      });
+      const auditar = (idEntidad: string, valorAnterior: string, valorNuevo: string) => ({
+        idAuditoria: randomUUID(),
+        entidad: 'periodo',
+        idEntidad,
+        campo: 'periodoActual',
+        valorAnterior,
+        valorNuevo,
+        idUser: currentUser.userId,
+        createdAt: ahora,
+      });
+      await tx.auditoria.createMany({
+        data: [
+          ...(anterior ? [auditar(anterior.idperiodo, 'true', 'false')] : []),
+          auditar(id, 'false', 'true'),
+        ],
       });
       return periodo;
     });
@@ -149,6 +208,7 @@ export class PeriodoService {
     estado: string | null;
     FechaInicio: Date | null;
     fechaFin: Date | null;
+    periodoActual: boolean;
   }): PeriodoView {
     return {
       id: p.idperiodo,
@@ -157,6 +217,7 @@ export class PeriodoService {
       estado: p.estado ?? '',
       fechaInicio: p.FechaInicio,
       fechaFin: p.fechaFin,
+      periodoActual: p.periodoActual,
     };
   }
 }

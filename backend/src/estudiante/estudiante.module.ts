@@ -6,10 +6,12 @@ import { EstudianteController } from './estudiante.controller';
 import { EstudianteService } from './estudiante.service';
 import { HistorialAdminController } from './historial-admin.controller';
 import { ModeloPredictivoService } from './modelo-predictivo.service';
+import { MotorPredictivo } from './motor-predictivo';
 
 @Module({
   imports: [CurriculumModule, PeriodoModule, PlanEstudioModule],
   controllers: [EstudianteController, HistorialAdminController],
-  providers: [EstudianteService, ModeloPredictivoService],
+  // Único lugar que conoce la implementación concreta del motor predictivo.
+  providers: [EstudianteService, { provide: MotorPredictivo, useClass: ModeloPredictivoService }],
 })
 export class EstudianteModule {}

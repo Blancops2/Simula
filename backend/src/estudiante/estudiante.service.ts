@@ -1,5 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, Simulacion, Simulacion_has_Clase } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import {
   EstadoHistorial,
@@ -18,20 +25,30 @@ import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
 import { PlanEstudioService } from '../plan-estudio/plan-estudio.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiante.dto';
+import { LIMITE_SIMULACIONES_POR_DEFECTO } from './dto/listar-simulaciones.dto';
 import {
   CamposControlSolicitud,
   ClaseCargaModelo,
-  EstadoHistorialModelo,
+  DatosEvaluacionCarga,
   EstudianteModelo,
   HistorialModelo,
   OrigenClaseCarga,
-  OrigenHistorialModelo,
   VERSION_CONTRATO_MODELO,
+  nuevoControlSolicitud,
 } from './modelo-predictivo.contrato';
-import { FallaPrediccion, ModeloPredictivoService } from './modelo-predictivo.service';
+import { FallaPrediccion, MotorPredictivo, OrigenModelo, recortarDetalleFalla } from './motor-predictivo';
 import { NivelRiesgo, riesgoClase, riesgoGlobal } from './riesgo.util';
 import { RegistrarHistorialDto } from './dto/registrar-historial.dto';
 import { semestreActual } from './periodo.util';
+import { Validacion, ValidacionSimulacion, advertencia, bloqueante, resultadoValidacion } from './validacion-simulacion';
+import {
+  calcularAvance,
+  calcularIndiceAcademico,
+  calcularSemestreSugerido,
+  mapearCargaAcademica,
+  mapearEstudiante,
+  mapearHistorial,
+} from './solicitud-simulacion.mapper';
 
 // Umbral (escala 0-100) que usa importarHistorialCsv para derivar
 // APROBADA/REPROBADA a partir de la nota, en vez de pedirle ese dato al
@@ -44,14 +61,19 @@ const NOTA_MINIMA_APROBACION = 65;
 // por esa pantalla) podía matricular más de 25 U.V. en un mismo período.
 const MAX_UNIDADES_VALORATIVAS_POR_PERIODO = 25;
 
-// Estados de HistorialAcademico que entiende el contrato del modelo
-// predictivo; una fila con otro valor (o null) no se le envía.
-const ESTADOS_HISTORIAL_MODELO = new Set<string>([
+// Un período cuenta como "cursado" si tiene al menos un intento cerrado
+// (con o sin nota); uno con solo clases EN_CURSO todavía no. Simular exige
+// al menos uno: sin historial el modelo no tiene con qué predecir.
+const ESTADOS_PERIODO_CURSADO = new Set<string>([
   EstadoHistorial.APROBADA,
   EstadoHistorial.REPROBADA,
-  EstadoHistorial.EN_CURSO,
   EstadoHistorial.NSP,
 ]);
+
+// Por debajo de este índice académico se advierte (sin bloquear) antes de
+// simular. Mismo umbral con que el mock del modelo marca "índice académico
+// bajo" (mock-modelo-predictivo/servidor.mjs).
+const INDICE_ACADEMICO_ADVERTENCIA = 70;
 
 export type EstadoClaseEstudiante = 'APROBADA' | 'EN_CURSO' | 'DISPONIBLE' | 'BLOQUEADA';
 
@@ -138,6 +160,50 @@ export interface RecomendacionPeriodo {
   completado: boolean;
 }
 
+type SimulacionConRelaciones = Prisma.SimulacionGetPayload<{ include: { periodo: true; clases: true } }>;
+
+// Tope de la respuesta del modelo que va al log cuando no se pudo guardar
+// (una normal mide unos cientos de bytes).
+const LARGO_MAXIMO_RESPUESTA_EN_LOG = 8 * 1024;
+
+function recortar(texto: string, largo: number): string {
+  return texto.length <= largo ? texto : `${texto.slice(0, largo)}… (recortada, ${texto.length} caracteres)`;
+}
+
+// Tipo del error y código de Prisma si lo hay ("PrismaClientKnownRequestError
+// P1001"), sin el mensaje: el de Prisma puede traer los datos de la consulta.
+function tipoError(error: unknown): string {
+  const codigo = (error as { code?: unknown })?.code;
+  const tipo = (error as Error)?.constructor?.name ?? typeof error;
+  return typeof codigo === 'string' ? `${tipo} ${codigo}` : tipo;
+}
+
+// Falla de una simulación: las del motor más ERROR_INTERNO, un error de SIMULA
+// después de crear la fila (no es del motor, por eso no va en FallaPrediccion).
+export type FallaSimulacion = FallaPrediccion | 'ERROR_INTERNO';
+
+// GET /estudiante/simulaciones: últimas simulaciones del período actual, en
+// resumen (el detalle está en GET /estudiante/simulaciones/:id).
+export interface ResumenSimulacion {
+  idSimulacion: string;
+  estado: EstadoSimulacion;
+  fechaGeneracion: string | null;
+  totalUnidadesValorativas: number;
+  limiteUnidadesValorativas: number;
+  clases: { codigo: string; nombre: string }[];
+  disponible: boolean;
+  falla: FallaSimulacion | null;
+  origenModelo: OrigenModelo | null;
+  probabilidadAprobarTodo: number | null;
+  riesgo: NivelRiesgo | null;
+}
+
+export interface SimulacionesPeriodoActual {
+  // null si el administrador no marcó ningún período como actual.
+  periodo: { id: string; anno: string; periodo: string } | null;
+  simulaciones: ResumenSimulacion[];
+}
+
 // Respuesta de POST /estudiante/simulaciones y GET /estudiante/simulaciones/:id
 // (HU-04-08; reemplaza a la de POST /estudiante/evaluacion-carga de la §7 de
 // docs/modelo-predictivo/03-decisiones-contrato.md). Primero la estructura de
@@ -163,18 +229,24 @@ export interface SimulacionRespuesta {
   disponible: boolean;
   // Por qué no hay evaluación, para que la UI dé un mensaje específico
   // (p. ej. carrera no soportada por el modelo). null cuando disponible.
-  falla: FallaPrediccion | null;
+  falla: FallaSimulacion | null;
   versionModelo: string | null;
+  // HU-05-07: quién respondió ('mock' = resultados ilustrativos, la UI lo
+  // avisa) y cuándo se guardó la evaluación. null si no hubo respuesta.
+  origenModelo: OrigenModelo | null;
+  fechaEvaluacion: string | null;
   probabilidadAprobarTodo: number | null;
   riesgo: NivelRiesgo | null;
+  // probabilidadAprobacion/riesgo en null si la clase quedó sin resultado
+  // (la UI muestra "sin información" en vez de un 0 % que no existe).
   clases: {
     id: string;
     codigo: string;
     nombre: string;
     unidadesValorativas: number;
     origen: OrigenClaseCarga;
-    probabilidadAprobacion: number;
-    riesgo: NivelRiesgo;
+    probabilidadAprobacion: number | null;
+    riesgo: NivelRiesgo | null;
     factores: string[];
   }[];
   observaciones: string[];
@@ -182,12 +254,14 @@ export interface SimulacionRespuesta {
 
 @Injectable()
 export class EstudianteService {
+  private readonly logger = new Logger(EstudianteService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly curriculum: CurriculumService,
     private readonly periodoService: PeriodoService,
     private readonly planEstudioService: PlanEstudioService,
-    private readonly modeloPredictivo: ModeloPredictivoService,
+    private readonly modeloPredictivo: MotorPredictivo,
   ) {}
 
   // ---------- Perfil ----------
@@ -211,9 +285,9 @@ export class EstudianteService {
             .then((c) => (c ? { id: c.idCarrera, nombre: c.nombre, codigo: c.codigo } : null))
         : null,
       plantilla: malla?.plantilla ?? null,
-      semestreSugerido: malla ? this.calcularSemestreSugerido(malla) : 1,
+      semestreSugerido: malla ? calcularSemestreSugerido(malla) : 1,
       avance: malla
-        ? this.calcularAvance(malla)
+        ? calcularAvance(malla)
         : {
             unidadesValorativasAprobadas: 0,
             unidadesValorativasTotalesObligatorias: 0,
@@ -237,39 +311,7 @@ export class EstudianteService {
     return {
       carrera: perfil.carrera,
       unidadesValorativasAprobadas: perfil.avance.unidadesValorativasAprobadas,
-      ...this.calcularIndiceAcademico(historial),
-    };
-  }
-
-  // Índice académico = Σ(nota × U.V.) / Σ(U.V.). Cuentan todos los intentos
-  // aprobados y reprobados (también las repeticiones); NSP y EN_CURSO no
-  // tienen nota y quedan fuera.
-  private calcularIndiceAcademico(
-    intentos: {
-      estado: string | null;
-      nota: string | null;
-      plantillaMallaClase: { clase: { unidadesValorativas: number | null } };
-    }[],
-  ): Pick<ResumenAcademico, 'indiceAcademico' | 'clasesConsideradas'> {
-    let sumaPonderada = 0;
-    let sumaUnidades = 0;
-    let clasesConsideradas = 0;
-    for (const intento of intentos) {
-      if (intento.estado !== EstadoHistorial.APROBADA && intento.estado !== EstadoHistorial.REPROBADA) {
-        continue;
-      }
-      const nota = intento.nota !== null && intento.nota.trim() !== '' ? Number(intento.nota) : NaN;
-      if (!Number.isFinite(nota)) {
-        continue;
-      }
-      const unidadesValorativas = intento.plantillaMallaClase.clase.unidadesValorativas ?? 0;
-      sumaPonderada += nota * unidadesValorativas;
-      sumaUnidades += unidadesValorativas;
-      clasesConsideradas++;
-    }
-    return {
-      indiceAcademico: sumaUnidades > 0 ? Math.round((sumaPonderada / sumaUnidades) * 100) / 100 : null,
-      clasesConsideradas,
+      ...calcularIndiceAcademico(historial),
     };
   }
 
@@ -483,9 +525,292 @@ export class EstudianteService {
   // SIMULA no estima probabilidades por su cuenta, así que sin modelo
   // configurado (o si falla) se responde `disponible: false` con el motivo,
   // pero la simulación queda guardada igual.
-  async simular(userId: string, periodoId: string, currentUser: RequestUser): Promise<SimulacionRespuesta> {
-    const idSimulacion = await this.generarSimulacion(userId, periodoId, currentUser);
-    return this.evaluarSimulacion(idSimulacion);
+  async simular(userId: string, periodoId: string | undefined, currentUser: RequestUser): Promise<SimulacionRespuesta> {
+    // HU-05-06: cada intento deja en el log su duración y su resultado
+    // (éxito, falla del motor, rechazo o error inesperado).
+    const inicio = Date.now();
+    let idSimulacion: string | null = null;
+    try {
+      // Mismas reglas que GET /simulaciones/validacion: el cliente no es la
+      // única barrera. Se responde con la lista completa, no solo la primera.
+      const validacion = await this.validarSimulacion(userId, periodoId, { auditarPeriodo: true });
+      if (!validacion.puedeSimular || !periodoId) {
+        const bloqueantes = validacion.validaciones.filter((v) => v.tipo === 'BLOQUEANTE').length;
+        throw new BadRequestException({
+          message: `No se puede simular: hay ${bloqueantes} ${bloqueantes === 1 ? 'problema' : 'problemas'} por resolver.`,
+          validaciones: validacion.validaciones,
+        });
+      }
+      idSimulacion = await this.generarSimulacion(userId, periodoId, currentUser);
+      const respuesta = await this.evaluarSimulacion(idSimulacion);
+      const duracionMs = Date.now() - inicio;
+      await this.guardarDuracionSimulacion(idSimulacion, duracionMs);
+      this.registrarIntentoSimulacion(
+        duracionMs,
+        periodoId,
+        idSimulacion,
+        respuesta.disponible ? 'EVALUADA' : `NO_EVALUADA:${respuesta.falla ?? 'NO_DISPONIBLE'}`,
+      );
+      return respuesta;
+    } catch (error) {
+      // Si la fila ya existe, la falla queda registrada en ella. Los rechazos
+      // previos (validaciones, carga vacía) no crean fila: no son una
+      // simulación, solo quedan en el log (RECHAZADA:4xx).
+      if (idSimulacion) {
+        await this.marcarErrorInterno(idSimulacion, error, { duracionMs: Date.now() - inicio });
+      }
+      // 4xx: la solicitud no se podía simular (validaciones, carga vacía);
+      // cualquier otra cosa es un error inesperado y va con su traza.
+      if (error instanceof HttpException && error.getStatus() < 500) {
+        this.registrarIntentoSimulacion(Date.now() - inicio, periodoId, idSimulacion, `RECHAZADA:${error.getStatus()}`);
+      } else {
+        this.registrarIntentoSimulacion(Date.now() - inicio, periodoId, idSimulacion, 'ERROR_INESPERADO', error);
+      }
+      throw error;
+    }
+  }
+
+  // Error de SIMULA a mitad de la evaluación: sin esto la fila quedaría en
+  // GENERADA sin falla, igual que una en curso. Solo toca filas GENERADA, para
+  // no pisar una evaluación o una falla del motor ya guardadas. detalleFalla
+  // lleva el tipo de error (y el código de Prisma, si hay), no el mensaje:
+  // ese puede traer datos de la consulta y ya va al log con su traza.
+  // Como el resto del registro, si no se puede guardar solo queda en el log.
+  private async marcarErrorInterno(
+    idSimulacion: string,
+    error: unknown,
+    { duracionMs, prefijo }: { duracionMs?: number; prefijo?: string } = {},
+  ) {
+    try {
+      await this.prisma.simulacion.updateMany({
+        where: { idSimulacion, estado: EstadoSimulacion.GENERADA },
+        data: {
+          estado: EstadoSimulacion.NO_EVALUADA,
+          falla: 'ERROR_INTERNO' satisfies FallaSimulacion,
+          detalleFalla: recortarDetalleFalla(prefijo ? `${prefijo}: ${tipoError(error)}` : tipoError(error)),
+          duracionMs,
+          updatedAt: new Date(),
+        },
+      });
+    } catch (errorGuardado) {
+      this.logger.warn(
+        `No se pudo registrar ERROR_INTERNO en la simulación ${idSimulacion}: ${(errorGuardado as Error)?.message}`,
+      );
+    }
+  }
+
+  // La duración se guarda también en la simulación (Simulacion.duracionMs),
+  // junto a su estado y falla. Es solo diagnóstico: si no se puede guardar,
+  // el estudiante igual recibe su resultado.
+  private async guardarDuracionSimulacion(idSimulacion: string, duracionMs: number) {
+    try {
+      await this.prisma.simulacion.update({ where: { idSimulacion }, data: { duracionMs } });
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo guardar duracionMs=${duracionMs} de la simulación ${idSimulacion}: ${(error as Error)?.message}`,
+      );
+    }
+  }
+
+  // Una línea por intento, con pares clave=valor para poder filtrarla. No
+  // lleva el id del estudiante: con idSimulacion se llega a la fila de la BD
+  // (y de ahí al idSolicitud que aparece en los logs del adaptador).
+  private registrarIntentoSimulacion(
+    duracionMs: number,
+    periodoId: string | undefined,
+    idSimulacion: string | null,
+    resultado: string,
+    error?: unknown,
+  ) {
+    const linea =
+      `Simulación resultado=${resultado} duracionMs=${duracionMs} ` +
+      `periodo=${periodoId ?? 'n/d'} idSimulacion=${idSimulacion ?? 'n/d'}`;
+    if (resultado === 'EVALUADA') {
+      this.logger.log(linea);
+    } else if (error) {
+      this.logger.error(`${linea}: ${(error as Error)?.message ?? String(error)}`, (error as Error)?.stack);
+    } else {
+      this.logger.warn(linea);
+    }
+  }
+
+  // Reglas que deben cumplirse antes de simular la carga inscrita en un
+  // período. Se evalúan TODAS (no corta en la primera) para que el
+  // estudiante vea de una vez todo lo que le falta. La usan
+  // GET /simulaciones/validacion (para deshabilitar el botón) y simular().
+  // `auditarPeriodo`: solo simular() deja rastro del acceso a un período no
+  // habilitado; la consulta previa se hace al abrir la página por cada
+  // período con inscripciones (también los ya cerrados) y llenaría la
+  // auditoría de ruido.
+  async validarSimulacion(
+    userId: string,
+    periodoId: string | undefined,
+    opciones: { auditarPeriodo?: boolean } = {},
+  ): Promise<ValidacionSimulacion> {
+    await this.obtenerEstudianteOFallar(userId);
+    const [periodo, plantillaId, historial] = await Promise.all([
+      periodoId ? this.prisma.periodo.findUnique({ where: { idperiodo: periodoId } }) : null,
+      this.obtenerPlantillaAsignada(userId),
+      this.prisma.historialAcademico.findMany({
+        where: { idUser: userId },
+        include: { plantillaMallaClase: { include: { clase: true } } },
+      }),
+    ]);
+    const validaciones: Validacion[] = [];
+
+    if (!periodoId) {
+      validaciones.push(
+        bloqueante(
+          'PERIODO_NO_SELECCIONADO',
+          'No has seleccionado el período académico que quieres simular.',
+          'Elige un período en el selector de período de esta página.',
+        ),
+      );
+    } else if (!periodo) {
+      validaciones.push(
+        bloqueante(
+          'PERIODO_INEXISTENTE',
+          'El período seleccionado no existe en el catálogo de períodos.',
+          'Elige otro período en el selector de período de esta página.',
+        ),
+      );
+    } else if (periodo.estado !== EstadoPeriodo.HABILITADO) {
+      validaciones.push(
+        bloqueante(
+          'PERIODO_NO_VIGENTE',
+          `El período ${etiquetaPeriodo(periodo)} ya no está habilitado para simular.`,
+          'Elige un período vigente en el selector de período de esta página.',
+        ),
+      );
+    }
+    if (periodoId && opciones.auditarPeriodo && periodo?.estado !== EstadoPeriodo.HABILITADO) {
+      await this.auditarAccesoPeriodoDenegado(periodoId, periodo?.estado ?? null, userId);
+    }
+
+    // La carga se revisa aunque el período ya no esté vigente, para mostrar
+    // todo lo que falta de una vez.
+    if (periodo) {
+      const inscripciones = await this.prisma.inscripcion.findMany({
+        where: { idUser: userId, idperiodo: periodo.idperiodo },
+        include: { plantillaMallaClase: { include: { clase: true } } },
+      });
+      if (inscripciones.length === 0) {
+        validaciones.push(
+          bloqueante(
+            'SIN_ASIGNATURAS',
+            `No tienes asignaturas inscritas en el período ${etiquetaPeriodo(periodo)}.`,
+            'Inscribe al menos una desde el catálogo de clases disponibles.',
+          ),
+        );
+      }
+      // El modelo cruza la carga por código: dos inscripciones con el mismo
+      // código (p. ej. de distintas versiones de la malla) son la misma clase.
+      const porCodigo = new Map<string, { nombre: string | null; veces: number }>();
+      for (const i of inscripciones) {
+        const codigo = i.plantillaMallaClase.clase.codigo ?? '';
+        const actual = porCodigo.get(codigo);
+        porCodigo.set(codigo, { nombre: i.plantillaMallaClase.clase.nombre, veces: (actual?.veces ?? 0) + 1 });
+      }
+      for (const [codigo, { nombre, veces }] of porCodigo) {
+        if (veces > 1) {
+          validaciones.push(
+            bloqueante(
+              'ASIGNATURA_DUPLICADA',
+              `La asignatura ${codigo} – ${nombre ?? ''} está inscrita más de una vez en el período ${etiquetaPeriodo(periodo)}.`,
+              'Cancela la inscripción repetida en la tabla de clases inscritas.',
+            ),
+          );
+        }
+      }
+    }
+
+    if (!plantillaId) {
+      validaciones.push(
+        bloqueante(
+          'SIN_MALLA',
+          'No tienes una malla curricular asignada.',
+          'Solicita al administrador que te asigne una malla curricular.',
+        ),
+      );
+    } else {
+      const plantilla = await this.prisma.plantillaMalla.findUnique({
+        where: { idPlantillaMalla: plantillaId },
+        include: { carrera: true },
+      });
+      if (!plantilla?.carrera) {
+        validaciones.push(
+          bloqueante(
+            'SIN_CARRERA',
+            `Tu malla curricular ${plantilla?.nombre ?? ''} no tiene una carrera asociada.`,
+            'Solicita al administrador que asocie una carrera a tu malla.',
+          ),
+        );
+      }
+    }
+
+    if (!historial.some((h) => ESTADOS_PERIODO_CURSADO.has(h.estado ?? ''))) {
+      validaciones.push(
+        bloqueante(
+          'SIN_PERIODO_CURSADO',
+          'Necesitas al menos un período cursado en tu historial académico para simular.',
+          'Importa tu historial desde Historial académico › Importar historial.',
+        ),
+      );
+    }
+
+    // Advertencia: solo orienta, no impide simular. Sin clases con nota
+    // todavía no hay índice y no se advierte nada.
+    const { indiceAcademico } = calcularIndiceAcademico(historial);
+    if (indiceAcademico !== null && indiceAcademico < INDICE_ACADEMICO_ADVERTENCIA) {
+      validaciones.push(
+        advertencia(
+          'INDICE_ACADEMICO_BAJO',
+          `Tu índice académico es ${indiceAcademico}; considera que esta carga puede ser exigente.`,
+          'Puedes simular igual; revisa el riesgo de cada clase en el resultado.',
+        ),
+      );
+    }
+
+    return resultadoValidacion(validaciones);
+  }
+
+  // Criterio 4 de trazabilidad: el estudiante consulta sus últimas
+  // simulaciones del período actual. Se reutiliza aRespuestaSimulacion para
+  // que el resumen diga lo mismo que el detalle (p. ej. GENERADA sin falla =
+  // NO_DISPONIBLE). Solo las propias: se filtra por idUser.
+  async listarSimulacionesPeriodoActual(
+    userId: string,
+    limite = LIMITE_SIMULACIONES_POR_DEFECTO,
+  ): Promise<SimulacionesPeriodoActual> {
+    const periodo = await this.prisma.periodo.findFirst({ where: { periodoActual: true } });
+    if (!periodo) {
+      return { periodo: null, simulaciones: [] };
+    }
+    const simulaciones = await this.prisma.simulacion.findMany({
+      where: { idUser: userId, idperiodo: periodo.idperiodo },
+      include: { periodo: true, clases: true },
+      orderBy: { createdAt: 'desc' },
+      take: limite,
+    });
+    return {
+      periodo: { id: periodo.idperiodo, anno: periodo.anno ?? '', periodo: periodo.periodo ?? '' },
+      simulaciones: simulaciones.map((s) => {
+        const r = this.aRespuestaSimulacion(s);
+        return {
+          idSimulacion: r.idSimulacion,
+          estado: r.estado,
+          fechaGeneracion: r.fechaGeneracion,
+          totalUnidadesValorativas: r.totalUnidadesValorativas,
+          limiteUnidadesValorativas: r.limiteUnidadesValorativas,
+          clases: r.carga.map((c) => ({ codigo: c.codigo, nombre: c.nombre })),
+          disponible: r.disponible,
+          falla: r.falla,
+          origenModelo: r.origenModelo,
+          probabilidadAprobarTodo: r.probabilidadAprobarTodo,
+          riesgo: r.riesgo,
+        };
+      }),
+    };
   }
 
   // Simulación ya generada (y evaluada o no) del estudiante autenticado.
@@ -513,53 +838,13 @@ export class EstudianteService {
       throw new BadRequestException('Debes indicar un período académico (periodoId) para simular la carga.');
     }
 
-    const clasesMalla = contexto.malla.niveles.flatMap((n) => n.clases);
-    const mallaPorId = new Map(clasesMalla.map((c) => [c.id, c]));
-    const mallaPorCodigo = new Map(clasesMalla.map((c) => [c.codigo, c]));
-
-    // Una inscripción puede apuntar a otra versión de la malla (reasignación
-    // del admin): se busca por id y luego por código en la malla actual, y si
-    // ya no existe en ella se arma con los datos de la propia inscripción.
-    const inscritas = inscripcionesPeriodo.map((i): ClaseCargaModelo & { id: string } => {
-      const pmc = i.plantillaMallaClase;
-      const actual = mallaPorId.get(pmc.idPlantillaMalla_has_Clase) ?? mallaPorCodigo.get(pmc.clase.codigo ?? '');
-      if (actual) {
-        return {
-          id: actual.id,
-          codigoClase: actual.codigo,
-          nombreClase: actual.nombre,
-          unidadesValorativas: actual.unidadesValorativas,
-          nivel: actual.nivel,
-          obligatoria: actual.tipo === TipoClase.OBLIGATORIA,
-          origen: 'INSCRITA',
-          prerrequisitos: actual.prerrequisitos.map((r) => r.codigo),
-          correquisitos: actual.correquisitos.map((r) => r.codigo),
-        };
-      }
-      return {
-        id: pmc.idPlantillaMalla_has_Clase,
-        codigoClase: pmc.clase.codigo ?? '',
-        nombreClase: pmc.clase.nombre,
-        unidadesValorativas: pmc.clase.unidadesValorativas ?? 0,
-        nivel: pmc.posicion.nivel ?? 0,
-        obligatoria: pmc.obligatoria !== false,
-        origen: 'INSCRITA',
-        prerrequisitos: [],
-        correquisitos: [],
-      };
-    });
-
-    // Entre inscripciones de distintas versiones de la malla podría repetirse
-    // un código (o resolverse a la misma clase actual), y el modelo cruza
-    // por código.
-    const codigosVistos = new Set<string>();
-    const carga = inscritas.filter((c) => {
-      if (codigosVistos.has(c.codigoClase)) {
-        return false;
-      }
-      codigosVistos.add(c.codigoClase);
-      return true;
-    });
+    const { cargaAcademica, idPorCodigo } = mapearCargaAcademica(
+      periodo,
+      inscripcionesPeriodo,
+      contexto.malla,
+      MAX_UNIDADES_VALORATIVAS_POR_PERIODO,
+    );
+    const carga = cargaAcademica.clases;
     if (carga.length === 0) {
       throw new BadRequestException(
         'No tienes clases inscritas en este período: inscribe al menos una para poder simular la carga.',
@@ -571,7 +856,7 @@ export class EstudianteService {
       contexto.malla,
       contexto.nivelSugerido,
     );
-    const control = ModeloPredictivoService.nuevoControl();
+    const control = nuevoControlSolicitud();
     const ahora = new Date();
     const idSimulacion = randomUUID();
     await this.prisma.simulacion.create({
@@ -584,7 +869,7 @@ export class EstudianteService {
         estado: EstadoSimulacion.GENERADA,
         nivelSugerido: contexto.nivelSugerido,
         limiteUnidadesValorativas: MAX_UNIDADES_VALORATIVAS_POR_PERIODO,
-        totalUnidadesValorativas: carga.reduce((total, c) => total + c.unidadesValorativas, 0),
+        totalUnidadesValorativas: cargaAcademica.totalUnidadesValorativas,
         versionContrato: control.versionContrato,
         idSolicitud: control.idSolicitud,
         estudianteModelo: JSON.stringify(estudiante),
@@ -593,7 +878,7 @@ export class EstudianteService {
         updatedAt: ahora,
         clases: {
           create: carga.map((c) => ({
-            idPlantillaMalla_has_Clase: c.id,
+            idPlantillaMalla_has_Clase: idPorCodigo.get(c.codigoClase)!,
             codigoClase: c.codigoClase,
             nombreClase: c.nombreClase,
             unidadesValorativas: c.unidadesValorativas,
@@ -610,23 +895,42 @@ export class EstudianteService {
   }
 
   // Etapa 2: consume la estructura persistida, consulta al modelo y guarda
-  // el resultado en la misma simulación. La respuesta se arma releyendo la
-  // BD, así lo que ve el estudiante es exactamente lo que quedó guardado.
+  // el resultado en la misma simulación. La respuesta se arma con la fila en
+  // memoria que se guarda, así el estudiante ve lo mismo que quedó en la BD,
+  // y lo recibe aunque el guardado falle.
   private async evaluarSimulacion(idSimulacion: string): Promise<SimulacionRespuesta> {
     const simulacion = await this.prisma.simulacion.findUniqueOrThrow({
       where: { idSimulacion },
       include: { periodo: true, clases: true },
     });
 
-    const marcarNoEvaluada = (falla: FallaPrediccion, fechaSolicitud: Date | null) =>
-      this.prisma.simulacion.update({
-        where: { idSimulacion },
-        data: { estado: EstadoSimulacion.NO_EVALUADA, falla, fechaSolicitud, updatedAt: new Date() },
+    // Criterio 3 (trazabilidad): de aquí en adelante el guardado no corta el
+    // flujo. El resultado se aplica a la fila ya leída y la respuesta se arma
+    // desde ahí, sin releer la BD; si el guardado falla, el estudiante recibe
+    // igual lo que respondió el modelo (ver guardarResultadoSimulacion).
+    // origenModelo: quién respondió (mock o modelo real); null si no hubo
+    // respuesta que leer. solicitudJson / respuestaJson: los cuerpos exactos
+    // de ida y vuelta, para evaluar el modelo real después.
+    const noEvaluada = (
+      falla: FallaPrediccion,
+      fechaSolicitud: Date | null,
+      trazas: Pick<Simulacion, 'detalleFalla' | 'origenModelo' | 'solicitudJson' | 'respuestaJson'>,
+    ) =>
+      this.guardarResultadoSimulacion(simulacion, {
+        estado: EstadoSimulacion.NO_EVALUADA,
+        falla,
+        fechaSolicitud,
+        ...trazas,
+        updatedAt: new Date(),
       });
 
     if (!this.modeloPredictivo.estaConfigurado()) {
-      await marcarNoEvaluada('NO_CONFIGURADO', null);
-      return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+      return noEvaluada('NO_CONFIGURADO', null, {
+        detalleFalla: null,
+        origenModelo: null,
+        solicitudJson: null,
+        respuestaJson: null,
+      });
     }
 
     const control: CamposControlSolicitud = {
@@ -634,71 +938,119 @@ export class EstudianteService {
       idSolicitud: simulacion.idSolicitud,
       fechaSolicitud: new Date().toISOString(),
     };
-    const resultado = await this.modeloPredictivo.evaluarCarga(
-      {
-        estudiante: JSON.parse(simulacion.estudianteModelo) as EstudianteModelo,
-        historial: JSON.parse(simulacion.historialModelo) as HistorialModelo[],
-        cargaAcademica: {
-          periodo: {
-            id: simulacion.periodo.idperiodo,
-            anno: simulacion.periodo.anno ?? '',
-            periodo: simulacion.periodo.periodo ?? '',
-          },
-          limiteUnidadesValorativas: simulacion.limiteUnidadesValorativas,
-          clases: this.ordenarClasesSimulacion(simulacion.clases).map(
-            (c): ClaseCargaModelo => ({
-              codigoClase: c.codigoClase,
-              nombreClase: c.nombreClase,
-              unidadesValorativas: c.unidadesValorativas,
-              nivel: c.nivel,
-              obligatoria: c.obligatoria,
-              origen: c.origen as OrigenClaseCarga,
-              prerrequisitos: JSON.parse(c.prerrequisitos) as string[],
-              correquisitos: JSON.parse(c.correquisitos) as string[],
-            }),
-          ),
-          totalUnidadesValorativas: simulacion.totalUnidadesValorativas,
+    const datos: DatosEvaluacionCarga = {
+      estudiante: JSON.parse(simulacion.estudianteModelo) as EstudianteModelo,
+      historial: JSON.parse(simulacion.historialModelo) as HistorialModelo[],
+      cargaAcademica: {
+        periodo: {
+          id: simulacion.periodo.idperiodo,
+          anno: simulacion.periodo.anno ?? '',
+          periodo: simulacion.periodo.periodo ?? '',
         },
+        limiteUnidadesValorativas: simulacion.limiteUnidadesValorativas,
+        clases: this.ordenarClasesSimulacion(simulacion.clases).map(
+          (c): ClaseCargaModelo => ({
+            codigoClase: c.codigoClase,
+            nombreClase: c.nombreClase,
+            unidadesValorativas: c.unidadesValorativas,
+            nivel: c.nivel,
+            obligatoria: c.obligatoria,
+            origen: c.origen as OrigenClaseCarga,
+            prerrequisitos: JSON.parse(c.prerrequisitos) as string[],
+            correquisitos: JSON.parse(c.correquisitos) as string[],
+          }),
+        ),
+        totalUnidadesValorativas: simulacion.totalUnidadesValorativas,
       },
-      control,
-    );
+    };
+    // Mismo cuerpo que envía el adaptador ({ ...control, ...datos }).
+    const solicitudJson = JSON.stringify({ ...control, ...datos });
+    const resultado = await this.modeloPredictivo.evaluarCarga(datos, control);
     const fechaSolicitud = new Date(control.fechaSolicitud);
 
     if (!resultado.ok) {
-      await marcarNoEvaluada(resultado.falla, fechaSolicitud);
-      return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+      // SOLICITUD_INVALIDA: la solicitud no salió de SIMULA, así que no hay
+      // fecha de envío (igual que con NO_CONFIGURADO); se guarda igual, ya
+      // que es justo la que hay que revisar.
+      return noEvaluada(resultado.falla, resultado.falla === 'SOLICITUD_INVALIDA' ? null : fechaSolicitud, {
+        detalleFalla: resultado.detalle,
+        origenModelo: resultado.origen,
+        solicitudJson,
+        respuestaJson: resultado.respuestaCruda,
+      });
     }
 
     // El adaptador ya garantizó exactamente una evaluación por clase de la carga.
     const respuesta = resultado.respuesta;
     const ahora = new Date();
-    await this.prisma.$transaction([
-      this.prisma.simulacion.update({
-        where: { idSimulacion },
-        data: {
-          estado: EstadoSimulacion.EVALUADA,
-          falla: null,
-          versionModelo: respuesta.versionModelo,
-          probabilidadAprobarTodo: respuesta.probabilidadAprobarTodo,
-          riesgo: riesgoGlobal(respuesta.probabilidadAprobarTodo),
-          observaciones: JSON.stringify(respuesta.observaciones),
-          fechaSolicitud,
-          fechaEvaluacion: ahora,
-          updatedAt: ahora,
-        },
-      }),
-      ...respuesta.clases.map((e) =>
-        this.prisma.simulacion_has_Clase.update({
-          where: { idSimulacion_codigoClase: { idSimulacion, codigoClase: e.codigoClase } },
-          data: {
-            probabilidadAprobacion: e.probabilidadAprobacion,
+    return this.guardarResultadoSimulacion(
+      simulacion,
+      {
+        estado: EstadoSimulacion.EVALUADA,
+        falla: null,
+        detalleFalla: null,
+        versionModelo: respuesta.versionModelo,
+        origenModelo: resultado.origen,
+        solicitudJson,
+        respuestaJson: resultado.respuestaCruda,
+        probabilidadAprobarTodo: new Prisma.Decimal(respuesta.probabilidadAprobarTodo),
+        riesgo: riesgoGlobal(respuesta.probabilidadAprobarTodo),
+        observaciones: JSON.stringify(respuesta.observaciones),
+        fechaSolicitud,
+        fechaEvaluacion: ahora,
+        updatedAt: ahora,
+      },
+      new Map(
+        respuesta.clases.map((e) => [
+          e.codigoClase,
+          {
+            probabilidadAprobacion: new Prisma.Decimal(e.probabilidadAprobacion),
             riesgo: riesgoClase(e.probabilidadAprobacion),
             factores: JSON.stringify(e.factores),
           },
-        }),
+        ]),
       ),
-    ]);
-    return this.obtenerSimulacion(simulacion.idUser, idSimulacion);
+    );
+  }
+
+  // Guarda el resultado de la evaluación y arma la respuesta desde la fila en
+  // memoria, la misma que se intentó guardar: si el guardado funciona, el
+  // estudiante ve exactamente lo que quedó en la BD (igual que GET /:id); si
+  // falla, lo ve igual. El fallo queda en el log, con la respuesta del modelo
+  // (recortada) para no perderla; la solicitud no va al log porque trae el
+  // historial del estudiante, y ya quedó en la fila desde generarSimulacion().
+  // Tampoco el mensaje del error: el de Prisma incluye los datos del update.
+  // La fila se marca ERROR_INTERNO para que no quede en GENERADA.
+  private async guardarResultadoSimulacion(
+    simulacion: SimulacionConRelaciones,
+    cambios: Partial<Simulacion>,
+    cambiosClases = new Map<string, Pick<Simulacion_has_Clase, 'probabilidadAprobacion' | 'riesgo' | 'factores'>>(),
+  ): Promise<SimulacionRespuesta> {
+    const { idSimulacion } = simulacion;
+    try {
+      await this.prisma.$transaction([
+        this.prisma.simulacion.update({ where: { idSimulacion }, data: cambios }),
+        ...[...cambiosClases].map(([codigoClase, data]) =>
+          this.prisma.simulacion_has_Clase.update({
+            where: { idSimulacion_codigoClase: { idSimulacion, codigoClase } },
+            data,
+          }),
+        ),
+      ]);
+    } catch (error) {
+      const respuestaJson = cambios.respuestaJson ?? null;
+      this.logger.error(
+        `No se guardó el resultado de la simulación ${idSimulacion} (idSolicitud ${simulacion.idSolicitud}, ` +
+          `estado ${cambios.estado}): ${tipoError(error)}; el estudiante lo recibe igual. ` +
+          `Respuesta del modelo: ${respuestaJson === null ? 'n/d' : recortar(respuestaJson, LARGO_MAXIMO_RESPUESTA_EN_LOG)}`,
+      );
+      await this.marcarErrorInterno(idSimulacion, error, { prefijo: 'guardado del resultado' });
+    }
+    return this.aRespuestaSimulacion({
+      ...simulacion,
+      ...cambios,
+      clases: simulacion.clases.map((c) => ({ ...c, ...cambiosClases.get(c.codigoClase) })),
+    });
   }
 
   // Orden estable por código, ya que la tabla no guarda posición.
@@ -706,9 +1058,7 @@ export class EstudianteService {
     return [...clases].sort((a, b) => a.codigoClase.localeCompare(b.codigoClase));
   }
 
-  private aRespuestaSimulacion(
-    simulacion: Prisma.SimulacionGetPayload<{ include: { periodo: true; clases: true } }>,
-  ): SimulacionRespuesta {
+  private aRespuestaSimulacion(simulacion: SimulacionConRelaciones): SimulacionRespuesta {
     const clasesOrdenadas = this.ordenarClasesSimulacion(simulacion.clases);
     // La estructura de entrada (criterio 1 de HU-04-08) va siempre, se haya
     // evaluado o no; el resultado del modelo solo si estado = EVALUADA.
@@ -740,8 +1090,10 @@ export class EstudianteService {
         disponible: false,
         // GENERADA sin falla = la evaluación se interrumpió antes de guardar
         // el resultado; para la UI es lo mismo que "no disponible".
-        falla: (simulacion.falla as FallaPrediccion | null) ?? 'NO_DISPONIBLE',
+        falla: (simulacion.falla as FallaSimulacion | null) ?? 'NO_DISPONIBLE',
         versionModelo: null,
+        origenModelo: (simulacion.origenModelo as OrigenModelo | null) ?? null,
+        fechaEvaluacion: null,
         probabilidadAprobarTodo: null,
         riesgo: null,
         clases: [],
@@ -753,10 +1105,12 @@ export class EstudianteService {
       disponible: true,
       falla: null,
       versionModelo: simulacion.versionModelo,
+      origenModelo: (simulacion.origenModelo as OrigenModelo | null) ?? null,
+      fechaEvaluacion: simulacion.fechaEvaluacion?.toISOString() ?? null,
       probabilidadAprobarTodo: Number(simulacion.probabilidadAprobarTodo),
       riesgo: simulacion.riesgo as NivelRiesgo,
       clases: clasesOrdenadas.map((c) => {
-        const probabilidad = Number(c.probabilidadAprobacion ?? 0);
+        const probabilidad = c.probabilidadAprobacion === null ? null : Number(c.probabilidadAprobacion);
         return {
           id: c.idPlantillaMalla_has_Clase,
           codigo: c.codigoClase,
@@ -764,7 +1118,7 @@ export class EstudianteService {
           unidadesValorativas: c.unidadesValorativas,
           origen: c.origen as OrigenClaseCarga,
           probabilidadAprobacion: probabilidad,
-          riesgo: (c.riesgo as NivelRiesgo | null) ?? riesgoClase(probabilidad),
+          riesgo: probabilidad === null ? null : ((c.riesgo as NivelRiesgo | null) ?? riesgoClase(probabilidad)),
           factores: c.factores ? (JSON.parse(c.factores) as string[]) : [],
         };
       }),
@@ -812,7 +1166,7 @@ export class EstudianteService {
 
     return {
       malla,
-      nivelSugerido: this.calcularSemestreSugerido(malla),
+      nivelSugerido: calcularSemestreSugerido(malla),
       clasesCandidatas,
       codigosInscritosEnPeriodo,
       periodo,
@@ -837,45 +1191,14 @@ export class EstudianteService {
       }),
     ]);
 
-    const estudiante: EstudianteModelo = {
-      idEstudiante: userId,
-      // D1: no se comparte el código institucional; el modelo recibe el
-      // historial completo y no necesita buscar al estudiante por su cuenta.
-      codigoEstudiantil: null,
-      carrera: { id: malla.plantilla.carreraId, codigo: carrera?.codigo ?? null, nombre: carrera?.nombre ?? null },
-      malla: { id: malla.plantilla.id, nombre: malla.plantilla.nombre, version: malla.plantilla.version },
+    const estudiante = mapearEstudiante({
+      idEstudiante: this.modeloPredictivo.seudonimoEstudiante(userId),
+      malla,
+      carrera,
       nivelSugerido,
-      avance: {
-        ...this.calcularAvance(malla),
-        indiceAcademico: this.calcularIndiceAcademico(registros).indiceAcademico,
-      },
-    };
-
-    // Se envían TODOS los intentos (reprobadas, NSP y repeticiones incluidas), sin
-    // deduplicar: los intentos fallidos son la señal más útil para predecir.
-    // Nivel y obligatoriedad salen de la malla ACTUAL cruzando por código
-    // (igual que construirMallaConEstado), y quedan en null si la clase ya no
-    // pertenece a ella.
-    const clasesPorCodigo = new Map(malla.niveles.flatMap((n) => n.clases).map((c) => [c.codigo, c]));
-    const historial = registros
-      .filter((h) => ESTADOS_HISTORIAL_MODELO.has(h.estado ?? ''))
-      .map((h): HistorialModelo => {
-        const codigo = h.plantillaMallaClase.clase.codigo ?? '';
-        const claseActual = clasesPorCodigo.get(codigo);
-        const estado = h.estado as EstadoHistorialModelo;
-        const nota = h.nota !== null && h.nota.trim() !== '' ? Number(h.nota) : NaN;
-        return {
-          codigoClase: codigo,
-          nombreClase: h.plantillaMallaClase.clase.nombre,
-          unidadesValorativas: h.plantillaMallaClase.clase.unidadesValorativas ?? 0,
-          nivel: claseActual?.nivel ?? null,
-          obligatoria: claseActual ? claseActual.tipo === TipoClase.OBLIGATORIA : null,
-          periodo: { anno: h.periodo.anno ?? '', periodo: h.periodo.periodo ?? '' },
-          estado,
-          nota: estado !== EstadoHistorial.EN_CURSO && Number.isFinite(nota) ? nota : null,
-          origen: (h.origen as OrigenHistorialModelo) ?? OrigenHistorial.ADMIN,
-        };
-      });
+      registros,
+    });
+    const historial = mapearHistorial(registros, malla);
 
     return { estudiante, historial };
   }
@@ -975,42 +1298,6 @@ export class EstudianteService {
       },
       niveles,
     };
-  }
-
-  private calcularAvance(malla: MallaConEstado): AvanceAcademico {
-    const todas = malla.niveles.flatMap((n) => n.clases);
-    const obligatorias = todas.filter((c) => c.tipo === TipoClase.OBLIGATORIA);
-    const aprobadas = todas.filter((c) => c.estadoEstudiante === 'APROBADA');
-    const aprobadasObligatorias = obligatorias.filter((c) => c.estadoEstudiante === 'APROBADA');
-
-    const unidadesValorativasTotalesObligatorias = obligatorias.reduce(
-      (sum, c) => sum + c.unidadesValorativas,
-      0,
-    );
-    const unidadesValorativasAprobadasObligatorias = aprobadasObligatorias.reduce(
-      (sum, c) => sum + c.unidadesValorativas,
-      0,
-    );
-
-    return {
-      unidadesValorativasAprobadas: aprobadas.reduce((sum, c) => sum + c.unidadesValorativas, 0),
-      unidadesValorativasTotalesObligatorias,
-      unidadesValorativasAprobadasObligatorias,
-      porcentajeMallaCompletada:
-        unidadesValorativasTotalesObligatorias > 0
-          ? Math.round(
-              (unidadesValorativasAprobadasObligatorias / unidadesValorativasTotalesObligatorias) * 100,
-            )
-          : 0,
-    };
-  }
-
-  private calcularSemestreSugerido(malla: MallaConEstado): number {
-    const nivelesAprobados = malla.niveles
-      .flatMap((n) => n.clases)
-      .filter((c) => c.tipo === TipoClase.OBLIGATORIA && c.estadoEstudiante === 'APROBADA')
-      .map((c) => c.nivel);
-    return nivelesAprobados.length > 0 ? Math.max(...nivelesAprobados) + 1 : 1;
   }
 
   // ---------- Períodos académicos habilitados (para elegir al matricular) ----------
@@ -1666,24 +1953,33 @@ export class EstudianteService {
     }
     const periodo = await this.prisma.periodo.findUnique({ where: { idperiodo: periodoId } });
     if (!periodo || periodo.estado !== EstadoPeriodo.HABILITADO) {
-      await this.prisma.auditoria.create({
-        data: {
-          idAuditoria: randomUUID(),
-          entidad: 'periodo',
-          // idEntidad es VARCHAR(45) en BD: se trunca (en vez de dejar que
-          // SQL Server rechace el INSERT) porque periodoId viene del cliente
-          // sin límite de longitud, y no queremos que un intento de acceso
-          // "raro" tumbe el propio registro de auditoría con un 500.
-          idEntidad: periodoId.slice(0, 45),
-          campo: 'acceso_denegado',
-          valorAnterior: null,
-          valorNuevo: periodo?.estado ?? 'INEXISTENTE',
-          idUser: userId,
-          createdAt: new Date(),
-        },
-      });
+      await this.auditarAccesoPeriodoDenegado(periodoId, periodo?.estado ?? null, userId);
       throw new BadRequestException('El período indicado no existe o ya no está habilitado.');
     }
     return periodo;
   }
+
+  // `estado` null = el período no existe en el catálogo.
+  private async auditarAccesoPeriodoDenegado(periodoId: string, estado: string | null, userId: string) {
+    await this.prisma.auditoria.create({
+      data: {
+        idAuditoria: randomUUID(),
+        entidad: 'periodo',
+        // idEntidad es VARCHAR(45) en BD: se trunca (en vez de dejar que
+        // SQL Server rechace el INSERT) porque periodoId viene del cliente
+        // sin límite de longitud, y no queremos que un intento de acceso
+        // "raro" tumbe el propio registro de auditoría con un 500.
+        idEntidad: periodoId.slice(0, 45),
+        campo: 'acceso_denegado',
+        valorAnterior: null,
+        valorNuevo: estado ?? 'INEXISTENTE',
+        idUser: userId,
+        createdAt: new Date(),
+      },
+    });
+  }
+}
+
+function etiquetaPeriodo(p: { anno: string | null; periodo: string | null }): string {
+  return `${p.anno ?? ''} - Período ${p.periodo ?? ''}`;
 }

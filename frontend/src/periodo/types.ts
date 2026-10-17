@@ -7,4 +7,6 @@ export interface Periodo {
   estado: EstadoPeriodo;
   fechaInicio: string | null;
   fechaFin: string | null;
+  // Período actual (solo uno); lo marca el administrador.
+  periodoActual: boolean;
 }

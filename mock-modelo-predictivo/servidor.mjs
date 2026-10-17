@@ -1,7 +1,7 @@
 // Mock del modelo predictivo de SIMULA — SOLO PARA PRUEBAS.
 //
 // El modelo real se construye fuera de este aplicativo; SIMULA solo lo
-// consume. Este servidor implementa el contrato v1.0 de
+// consume. Este servidor implementa el contrato v1.3 de
 // docs/modelo-predictivo/03-decisiones-contrato.md con respuestas deterministas
 // (misma petición → misma respuesta) para poder probar el backend y la UI
 // mientras el modelo real no está listo. Las probabilidades salen de una
@@ -18,8 +18,8 @@ const API_KEY = process.env.MOCK_API_KEY ?? '';
 const MAX_RECOMENDACIONES = Number(process.env.MOCK_MAX_RECOMENDACIONES ?? 5);
 // Duración del escenario "timeout": debe superar PREDICTIVE_MODEL_TIMEOUT_MS del backend.
 const DEMORA_TIMEOUT_MS = Number(process.env.MOCK_DEMORA_TIMEOUT_MS ?? 5000);
-const VERSION_MODELO = 'mock-1.2';
-const VERSION_CONTRATO = '1.2';
+const VERSION_MODELO = 'mock-1.3';
+const VERSION_CONTRATO = '1.3';
 
 const ESCENARIOS = [
   'normal',
@@ -54,9 +54,15 @@ function hash(texto) {
   return h >>> 0;
 }
 
+// Trazabilidad: TODA respuesta (éxito, error, malformada, /salud) lleva
+// "source": "mock" en el cuerpo y la cabecera X-Source: mock, para que quien
+// la reciba sepa que no viene del modelo real. La cabecera cubre también los
+// cuerpos que no son objeto.
+const ORIGEN = 'mock';
+
 function enviar(res, estado, cuerpo, cabeceras = {}) {
-  res.writeHead(estado, { 'Content-Type': 'application/json; charset=utf-8', ...cabeceras });
-  res.end(typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo));
+  res.writeHead(estado, { 'Content-Type': 'application/json; charset=utf-8', 'X-Source': ORIGEN, ...cabeceras });
+  res.end(typeof cuerpo === 'string' ? cuerpo : JSON.stringify({ ...cuerpo, source: ORIGEN }));
 }
 
 function enviarError(res, estado, idSolicitud, codigo, mensaje, campo = null, cabeceras = {}) {

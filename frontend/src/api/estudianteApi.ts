@@ -11,6 +11,8 @@ import type {
   ResultadoImportacionHistorial,
   ResumenAcademico,
   SimulacionCarga,
+  SimulacionesPeriodoActual,
+  ValidacionSimulacion,
 } from '../estudiante/types';
 import { httpClient } from './httpClient';
 
@@ -52,10 +54,45 @@ export async function getRecomendacionClases(periodoId?: string): Promise<Recome
   return data;
 }
 
+// HU-05-06: tope de espera de la simulación del lado del cliente, para que
+// el estudiante no quede esperando si el backend no contesta. Holgado
+// respecto al timeout del motor en el backend (PREDICTIVE_MODEL_TIMEOUT_MS,
+// 3000 ms por defecto), que normalmente vence antes y responde
+// TIEMPO_EXCEDIDO.
+export const TIEMPO_MAXIMO_SIMULACION_MS = 20_000;
+
 // HU-04-08: simula la carga inscrita en el período (el backend toma las
-// inscripciones de la BD; no se mandan clases).
+// inscripciones de la BD; no se mandan clases). Al vencer el tope, axios
+// rechaza con código ETIMEDOUT (clarifyTimeoutError), distinto del
+// ECONNABORTED de una petición cancelada.
 export async function simularCarga(periodoId: string): Promise<SimulacionCarga> {
-  const { data } = await httpClient.post<SimulacionCarga>('/estudiante/simulaciones', { periodoId });
+  const { data } = await httpClient.post<SimulacionCarga>(
+    '/estudiante/simulaciones',
+    { periodoId },
+    { timeout: TIEMPO_MAXIMO_SIMULACION_MS, transitional: { clarifyTimeoutError: true } },
+  );
+  return data;
+}
+
+// Validaciones previas a simular (las mismas que aplica el POST de arriba).
+export async function validarSimulacion(periodoId: string): Promise<ValidacionSimulacion> {
+  const { data } = await httpClient.get<ValidacionSimulacion>('/estudiante/simulaciones/validacion', {
+    params: { periodoId },
+  });
+  return data;
+}
+
+// Últimas simulaciones del estudiante en el período actual (las marca el
+// administrador con periodoActual); 5 por defecto en el backend.
+export async function getSimulacionesPeriodoActual(): Promise<SimulacionesPeriodoActual> {
+  const { data } = await httpClient.get<SimulacionesPeriodoActual>('/estudiante/simulaciones');
+  return data;
+}
+
+// Detalle completo de una simulación propia, con la misma forma que la
+// respuesta de simularCarga.
+export async function getSimulacion(idSimulacion: string): Promise<SimulacionCarga> {
+  const { data } = await httpClient.get<SimulacionCarga>(`/estudiante/simulaciones/${encodeURIComponent(idSimulacion)}`);
   return data;
 }
 

@@ -1,12 +1,17 @@
-// Tipos del contrato v1.2 con la API externa del modelo predictivo (HU-04-01).
+// Tipos del contrato v1.3 con la API externa del modelo predictivo (HU-04-01).
 // Fuente: docs/modelo-predictivo/03-decisiones-contrato.md (v1.0) más los
 // cambios de docs/modelo-predictivo/05-recomendacion-carga.md (v1.1: la
-// recomendación pasa a ser una carga completa con probabilidades) y v1.2
-// (índice académico en estudiante.avance y estado NSP en el historial). Son
-// interfaces TS a propósito (sin Zod): el backend no depende de Zod y la
-// respuesta se valida a mano en ModeloPredictivoService.
+// recomendación pasa a ser una carga completa con probabilidades), v1.2
+// (índice académico en estudiante.avance y estado NSP en el historial) y
+// v1.3 (idEstudiante pasa a ser un seudónimo, HU-05-03). Esquemas JSON en
+// contrato-v1.3/: la solicitud de evaluación (se valida antes de enviar) y
+// las respuestas de ambos endpoints (se validan antes de entregarlas a la
+// aplicación), todos en ModeloPredictivoService. Son interfaces TS a
+// propósito (sin Zod): el backend no depende de Zod.
 
-export const VERSION_CONTRATO_MODELO = '1.2';
+import { randomUUID } from 'crypto';
+
+export const VERSION_CONTRATO_MODELO = '1.3';
 
 // ---------- Bloques comunes de la petición ----------
 
@@ -17,7 +22,9 @@ export interface CamposControlSolicitud {
 }
 
 export interface EstudianteModelo {
-  idEstudiante: string; // User.idUser, id opaco
+  // v1.3: seudónimo HMAC-SHA256 (64 caracteres hex) de User.idUser; el
+  // modelo no recibe el id real.
+  idEstudiante: string;
   // D1: se mantiene en el contrato, pero SIMULA lo envía en null (minimización
   // de datos); el modelo ya recibe el historial completo en la petición.
   codigoEstudiantil: string | null;
@@ -92,6 +99,16 @@ export interface DatosRecomendaciones {
   // El modelo solo puede recomendar dentro de esta lista (reemplaza a la
   // lista de códigos `clasesDisponibles` de la v1.0).
   clasesCandidatas: ClaseCandidataModelo[];
+}
+
+// Campos de control de una solicitud nueva (mismo formato para cualquier
+// implementación del motor).
+export function nuevoControlSolicitud(): CamposControlSolicitud {
+  return {
+    versionContrato: VERSION_CONTRATO_MODELO,
+    idSolicitud: randomUUID(),
+    fechaSolicitud: new Date().toISOString(),
+  };
 }
 
 export type SolicitudRecomendaciones = CamposControlSolicitud & DatosRecomendaciones;

@@ -45,4 +45,13 @@ export class PeriodoController {
   ) {
     return this.periodo.cambiarEstado(id, dto, user);
   }
+
+  @Patch(':id/actual')
+  @ApiOperation({
+    summary:
+      'Marca un período habilitado como el período actual; el que lo era deja de serlo. Solo hay uno a la vez. `400` si el período no está habilitado.',
+  })
+  marcarActual(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+    return this.periodo.marcarActual(id, user);
+  }
 }

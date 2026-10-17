@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { cambiarEstadoPeriodo, createPeriodo, listPeriodos, updatePeriodo } from '../api/periodoApi';
+import { cambiarEstadoPeriodo, createPeriodo, listPeriodos, marcarPeriodoActual, updatePeriodo } from '../api/periodoApi';
 import { AppShell } from '../components/AppShell';
 import { PeriodoEditModal } from '../components/periodo/PeriodoEditModal';
 import type { Periodo } from '../periodo/types';
@@ -54,12 +54,25 @@ export function PeriodosPage() {
     }
   }
 
+  function mensajeError(err: unknown, porDefecto: string): string {
+    return (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? porDefecto;
+  }
+
   async function onToggleEstado(periodo: Periodo) {
     try {
       await cambiarEstadoPeriodo(periodo.id, periodo.estado === 'habilitado' ? 'deshabilitado' : 'habilitado');
       await cargar();
-    } catch {
-      setError('No se pudo actualizar el estado del período.');
+    } catch (err: unknown) {
+      setError(mensajeError(err, 'No se pudo actualizar el estado del período.'));
+    }
+  }
+
+  async function onMarcarActual(periodo: Periodo) {
+    try {
+      await marcarPeriodoActual(periodo.id);
+      await cargar();
+    } catch (err: unknown) {
+      setError(mensajeError(err, 'No se pudo marcar el período como actual.'));
     }
   }
 
@@ -135,7 +148,8 @@ export function PeriodosPage() {
                     <td>
                       <span className={`badge ${p.estado === 'habilitado' ? 'badge-success' : 'badge-neutral'}`}>
                         {p.estado === 'habilitado' ? 'Habilitado' : 'Deshabilitado'}
-                      </span>
+                      </span>{' '}
+                      {p.periodoActual && <span className="badge badge-accent">Período actual</span>}
                     </td>
                     <td>{p.fechaInicio?.slice(0, 10) ?? '—'}</td>
                     <td>{p.fechaFin?.slice(0, 10) ?? '—'}</td>
@@ -143,9 +157,28 @@ export function PeriodosPage() {
                       <button className="btn btn-secondary btn-sm" onClick={() => setPeriodoEditando(p)}>
                         Editar
                       </button>
-                      <button className="btn btn-secondary btn-sm" onClick={() => onToggleEstado(p)}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => onToggleEstado(p)}
+                        disabled={p.periodoActual && p.estado === 'habilitado'}
+                        title={
+                          p.periodoActual && p.estado === 'habilitado'
+                            ? 'Es el período actual: marca otro como actual antes de deshabilitarlo.'
+                            : undefined
+                        }
+                      >
                         {p.estado === 'habilitado' ? 'Deshabilitar' : 'Habilitar'}
                       </button>
+                      {!p.periodoActual && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => onMarcarActual(p)}
+                          disabled={p.estado !== 'habilitado'}
+                          title={p.estado !== 'habilitado' ? 'Solo un período habilitado puede ser el actual.' : undefined}
+                        >
+                          Marcar como actual
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

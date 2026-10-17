@@ -31,6 +31,12 @@ export async function updatePeriodo(id: string, dto: UpdatePeriodoInput): Promis
   return data;
 }
 
+// Marca el período (habilitado) como el período actual; el anterior deja de serlo.
+export async function marcarPeriodoActual(id: string): Promise<Periodo> {
+  const { data } = await httpClient.patch<Periodo>(`/periodos/${id}/actual`);
+  return data;
+}
+
 export async function cambiarEstadoPeriodo(id: string, estado: EstadoPeriodo): Promise<Periodo> {
   const { data } = await httpClient.patch<Periodo>(`/periodos/${id}/estado`, { estado });
   return data;
