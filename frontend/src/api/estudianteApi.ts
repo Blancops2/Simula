@@ -8,12 +8,12 @@ import type {
   PlanEstudioPeriodoConEstado,
   RecomendacionClases,
   RecomendacionPeriodo,
-  ResultadoImportacionHistorial,
   ResumenAcademico,
   SimulacionCarga,
   SimulacionesPeriodoActual,
   ValidacionSimulacion,
 } from '../estudiante/types';
+import type { ExtractionResult } from '../estudiante/extraccionPdf.types';
 import { httpClient } from './httpClient';
 
 export async function getPerfil(): Promise<PerfilEstudiante> {
@@ -111,11 +111,13 @@ export async function getHistorial(): Promise<HistorialItem[]> {
   return data;
 }
 
-export async function importarHistorial(archivo: File): Promise<ResultadoImportacionHistorial> {
+// Solo lectura: el backend extrae los datos del PDF y no guarda nada.
+export async function extraerHistorialPdf(archivo: File, signal?: AbortSignal): Promise<ExtractionResult> {
   const formData = new FormData();
-  formData.append('archivo', archivo);
-  const { data } = await httpClient.post<ResultadoImportacionHistorial>('/estudiante/historial/importar', formData, {
+  formData.append('file', archivo);
+  const { data } = await httpClient.post<ExtractionResult>('/estudiante/historial/extraer-pdf', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
   });
   return data;
 }

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { loginRequest, logoutRequest } from '../api/authApi';
+import { loginRequest, logoutRequest, registroRequest, type RegistroPayload } from '../api/authApi';
 import { refreshSession, setAccessToken } from '../api/httpClient';
 import type { AuthUser } from './types';
 
@@ -9,6 +9,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   status: AuthStatus;
   login: (email: string, password: string) => Promise<AuthUser>;
+  register: (payload: RegistroPayload) => Promise<AuthUser>;
   logout: () => Promise<void>;
 }
 
@@ -45,6 +46,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.user;
   }, []);
 
+  const register = useCallback(async (payload: RegistroPayload) => {
+    const res = await registroRequest(payload);
+    setAccessToken(res.accessToken);
+    setUser(res.user);
+    setStatus('authenticated');
+    return res.user;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await logoutRequest();
@@ -56,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, status, login, logout }}>
+    <AuthContext.Provider value={{ user, status, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -4,6 +4,7 @@ import { EstudiantePlanEstudioPage } from '../pages/EstudiantePlanEstudioPage';
 import { HistorialPage } from '../pages/HistorialPage';
 import { ImportarHistorialPage } from '../pages/ImportarHistorialPage';
 import { LoginPage } from '../pages/LoginPage';
+import { RegistroPage } from '../pages/RegistroPage';
 import { PlantillaEditorPage } from '../pages/PlantillaEditorPage';
 import { PensumPage } from '../pages/PensumPage';
 import { PeriodosPage } from '../pages/PeriodosPage';
@@ -18,6 +19,7 @@ export function AppRouter() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/registro" element={<RegistroPage />} />
 
       <Route element={<ProtectedRoute allowedRoles={['ESTUDIANTE']} />}>
         <Route path="/estudiante" element={<StudentDashboard />} />

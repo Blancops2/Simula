@@ -72,13 +72,6 @@ export interface HistorialItem {
   clase: { codigo: string; nombre: string; unidadesValorativas: number; nivel: number };
 }
 
-export interface ResultadoImportacionHistorial {
-  totalFilas: number;
-  registrados: number;
-  omitidos: number;
-  errores: string[];
-}
-
 export interface ClasePensum {
   id: string;
   codigo: string;

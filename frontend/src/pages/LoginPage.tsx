@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { useLocation, useNavigate, type Location } from 'react-router-dom';
+import { Link, useLocation, useNavigate, type Location } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { authErrorMessage } from '../auth/authErrors';
 import { ROLE_HOME } from '../auth/types';
 
 export function LoginPage() {
@@ -19,21 +20,12 @@ export function LoginPage() {
     setSubmitting(true);
 
     try {
-      const user = await login(email, password);
+      const user = await login(email.trim(), password);
       const redirectTo = location.state?.from?.pathname ?? ROLE_HOME[user.role];
       navigate(redirectTo, { replace: true });
     } catch (err: unknown) {
-      const axiosError = err as { response?: { status?: number; data?: { message?: string } } };
-      const status = axiosError.response?.status;
-      const message = axiosError.response?.data?.message;
-
-      if (status === 423) {
-        setError(message ?? 'Cuenta bloqueada temporalmente. Intenta más tarde.');
-      } else if (status === 403) {
-        setError(message ?? 'Tu cuenta no tiene un rol asignado. Contacta al administrador.');
-      } else {
-        setError('Correo o contraseña incorrectos.');
-      }
+      setError(authErrorMessage(err));
+      setPassword('');
     } finally {
       setSubmitting(false);
     }
@@ -75,6 +67,10 @@ export function LoginPage() {
         <button type="submit" className={`btn btn-primary ${submitting ? 'btn-loading' : ''}`} disabled={submitting}>
           {submitting ? 'Ingresando…' : 'Iniciar sesión'}
         </button>
+
+        <p className="login-switch">
+          ¿Primera vez en Σimula? <Link to="/registro">Regístrate como estudiante</Link>
+        </p>
       </form>
     </div>
   );

@@ -50,11 +50,6 @@ import {
   mapearHistorial,
 } from './solicitud-simulacion.mapper';
 
-// Umbral (escala 0-100) que usa importarHistorialCsv para derivar
-// APROBADA/REPROBADA a partir de la nota, en vez de pedirle ese dato al
-// estudiante en el CSV (decisión de negocio, no viene de ninguna tabla).
-const NOTA_MINIMA_APROBACION = 65;
-
 // HU-03-04: tope de unidades valorativas por período. Ya existía en el
 // frontend (SeleccionClasesPage.tsx) pero no se validaba aquí, así que un
 // cliente que llamara POST /estudiante/inscripciones directamente (sin pasar
@@ -118,13 +113,6 @@ export interface PensumArbol {
 }
 
 export type PlanEstudioPeriodoConEstado = { id: string; anno: string; periodo: string; clases: ClaseConEstado[] };
-
-export interface ResultadoImportacionHistorial {
-  totalFilas: number;
-  registrados: number;
-  omitidos: number;
-  errores: string[];
-}
 
 // Clase de la carga recomendada: la clase de la malla más el resultado del
 // modelo (null/[] en el fallback local, que no estima probabilidades).
@@ -1314,10 +1302,9 @@ export class EstudianteService {
   //
   // El Pensum es una vista puramente visual del avance del estudiante: el
   // historial en sí (aprobada/reprobada, con nota) ya no se edita desde
-  // aquí, se sube por CSV (ver importarHistorialCsv) o lo carga el
-  // administrador. Lo único que el estudiante sigue pudiendo autorreportar
-  // desde el Pensum es "estoy cursando esto ahora" (EN_CURSO), porque el CSV
-  // no acepta ese estado (no tiene nota final todavía) — ver
+  // aquí, lo carga el administrador (o quedó de la antigua importación por
+  // CSV, ya retirada). Lo único que el estudiante sigue pudiendo autorreportar
+  // desde el Pensum es "estoy cursando esto ahora" (EN_CURSO) — ver
   // marcarClaseEnCurso/desmarcarClaseEnCurso más abajo.
 
   async obtenerPensum(userId: string, currentUser: RequestUser): Promise<PensumArbol> {
@@ -1400,7 +1387,7 @@ export class EstudianteService {
   // existencia es clase + período VIGENTE (no "cualquier fila AUTOREPORTE
   // de esta clase"): a diferencia del diseño anterior, ahora una misma
   // clase puede tener varias filas AUTOREPORTE en distintos períodos
-  // (cargadas por importarHistorialCsv, ej. reprobada en 2023-1), y no hay
+  // (cargadas por la antigua importación CSV, ej. reprobada en 2023-1), y no hay
   // que tocarlas al marcar/desmarcar el período actual como en curso.
   async marcarClaseEnCurso(userId: string, claseId: string, currentUser: RequestUser) {
     await this.obtenerEstudianteOFallar(userId);
@@ -1496,207 +1483,6 @@ export class EstudianteService {
         nivel: h.plantillaMallaClase.posicion.nivel,
       },
     }));
-  }
-
-  // Autoservicio de HU-03-03: el estudiante sube su propio historial en lote
-  // en vez de esperar a que el administrador lo capture clase por clase. Se
-  // resuelve por CÓDIGO de clase (no por id interno, que el estudiante no
-  // conoce) contra la plantilla que tiene asignada, y respeta la misma regla
-  // que el resto del módulo: un registro ADMIN nunca se sobrescribe desde
-  // aquí (misma regla que marcarClaseEnCurso más arriba), así que las filas
-  // del CSV que choquen con uno oficial simplemente se cuentan como
-  // "omitidas".
-  // El CSV no trae columna "estado": el estudiante solo aporta la nota (o
-  // NSP) y el estado (APROBADA/REPROBADA) se calcula contra NOTA_MINIMA_APROBACION,
-  // para no pedirle un dato que ya se deduce de la nota y evitar que
-  // escriba un estado inconsistente con ella.
-  //
-  // Todo lo que se necesita para resolver CUALQUIER fila (clases de la
-  // malla, catálogo de períodos, historial ya existente del estudiante) se
-  // trae de una sola vez ANTES del loop y se resuelve en memoria con Maps:
-  // así el costo es fijo (3 consultas de lectura) sin importar cuántas
-  // filas traiga el CSV, en vez de repetir esas mismas consultas por fila.
-  // Las escrituras sí son una por fila (creates/updates distintos), pero
-  // van todas en una sola transacción al final.
-  async importarHistorialCsv(userId: string, archivo?: Express.Multer.File): Promise<ResultadoImportacionHistorial> {
-    await this.obtenerEstudianteOFallar(userId);
-    if (!archivo || !archivo.buffer?.length) {
-      throw new BadRequestException('Debes adjuntar un archivo CSV con tu historial.');
-    }
-    if (!/\.csv$/i.test(archivo.originalname ?? '')) {
-      throw new BadRequestException('El archivo debe tener extensión .csv.');
-    }
-
-    const plantillaId = await this.obtenerPlantillaAsignada(userId);
-    if (!plantillaId) {
-      throw new BadRequestException('No tienes una plantilla de malla curricular asignada.');
-    }
-
-    const [clasesDeLaMalla, periodosCatalogo, historialExistente] = await Promise.all([
-      this.prisma.plantillaMalla_has_Clase.findMany({
-        where: { idPlantillaMalla: plantillaId },
-        include: { clase: true },
-      }),
-      this.prisma.periodo.findMany(),
-      this.prisma.historialAcademico.findMany({ where: { idUser: userId } }),
-    ]);
-
-    const pmcPorCodigo = new Map(
-      clasesDeLaMalla
-        .filter((pmc) => pmc.clase.codigo)
-        .map((pmc) => [pmc.clase.codigo!.trim().toUpperCase(), pmc.idPlantillaMalla_has_Clase] as const),
-    );
-    const idperiodoPorClave = new Map<string, string>(
-      periodosCatalogo.map((p) => [`${p.anno}-${p.periodo}`, p.idperiodo]),
-    );
-    // Igual que registrarHistorial (admin): la clave real de unicidad es
-    // idUser + clase + período, SIN distinguir origen — un mismo par
-    // clase/período no puede tener dos filas (una ADMIN y otra AUTOREPORTE)
-    // al mismo tiempo, porque registrarHistorial tampoco filtra por origen
-    // al decidir si actualiza o crea.
-    const historialPorClave = new Map(
-      historialExistente.map((h) => [`${h.idPlantillaMalla_has_Clase}|${h.idperiodo}`, h] as const),
-    );
-
-    const texto = archivo.buffer.toString('utf-8').replace(/^﻿/, '');
-    const lineas = texto.split(/\r\n|\r|\n/).filter((linea) => linea.trim().length > 0);
-    if (lineas.length === 0) {
-      throw new BadRequestException('El archivo CSV está vacío.');
-    }
-
-    const encabezadosEsperados = ['codigo', 'periodo', 'nota'];
-    const primeraFila = this.parseCsvLine(lineas[0]).map((c) => c.toLowerCase());
-    const tieneEncabezado = encabezadosEsperados.every((col, i) => primeraFila[i] === col);
-    const filasDatos = tieneEncabezado ? lineas.slice(1) : lineas;
-    const offset = tieneEncabezado ? 2 : 1;
-
-    const errores: string[] = [];
-    let omitidos = 0;
-    const aCrear: Prisma.HistorialAcademicoCreateManyInput[] = [];
-    const aActualizar: { id: string; estado: EstadoHistorial; nota: string | null }[] = [];
-
-    for (let i = 0; i < filasDatos.length; i++) {
-      const numeroFila = i + offset;
-      const [codigoRaw, periodoRaw, notaRaw] = this.parseCsvLine(filasDatos[i]);
-
-      const codigo = (codigoRaw ?? '').trim().toUpperCase();
-      if (!codigo) {
-        errores.push(`Fila ${numeroFila}: falta el código de la clase.`);
-        continue;
-      }
-      const pmcId = pmcPorCodigo.get(codigo);
-      if (!pmcId) {
-        errores.push(`Fila ${numeroFila}: la clase "${codigoRaw}" no existe en tu malla curricular.`);
-        continue;
-      }
-
-      const periodo = (periodoRaw ?? '').trim();
-      if (!/^\d{4}-[12]$/.test(periodo)) {
-        errores.push(`Fila ${numeroFila}: el período "${periodoRaw ?? ''}" debe tener el formato AAAA-1 o AAAA-2.`);
-        continue;
-      }
-      const idperiodo = idperiodoPorClave.get(periodo);
-      if (!idperiodo) {
-        errores.push(
-          `Fila ${numeroFila}: no existe el período académico ${periodo} en el catálogo. Pide al administrador que lo registre.`,
-        );
-        continue;
-      }
-
-      // El CSV solo trae la nota (el estudiante no elige "aprobada" o
-      // "reprobada" a mano): el estado se deriva de la nota contra
-      // NOTA_MINIMA_APROBACION, igual que lo haría una boleta real. Por eso
-      // este importador no acepta EN_CURSO — una clase en curso, sin nota
-      // final todavía, se sigue autorreportando desde el Pensum. "NSP" (no se
-      // presentó) se acepta en lugar de la nota y se guarda sin nota.
-      const notaTexto = (notaRaw ?? '').trim();
-      if (notaTexto === '') {
-        errores.push(`Fila ${numeroFila}: falta la nota.`);
-        continue;
-      }
-      let estado: EstadoHistorial;
-      let notaGuardada: string | null;
-      if (notaTexto.toUpperCase() === EstadoHistorial.NSP) {
-        estado = EstadoHistorial.NSP;
-        notaGuardada = null;
-      } else {
-        const nota = Number(notaTexto);
-        if (Number.isNaN(nota) || nota < 0 || nota > 100) {
-          errores.push(`Fila ${numeroFila}: la nota "${notaRaw}" debe ser un número entre 0 y 100, o NSP.`);
-          continue;
-        }
-        estado = nota >= NOTA_MINIMA_APROBACION ? EstadoHistorial.APROBADA : EstadoHistorial.REPROBADA;
-        notaGuardada = String(nota);
-      }
-
-      const existente = historialPorClave.get(`${pmcId}|${idperiodo}`);
-      if (existente?.origen === OrigenHistorial.ADMIN) {
-        omitidos++;
-        continue;
-      }
-
-      if (existente) {
-        aActualizar.push({ id: existente.idHistorialAcademico, estado, nota: notaGuardada });
-      } else {
-        aCrear.push({
-          idHistorialAcademico: randomUUID(),
-          idUser: userId,
-          idPlantillaMalla_has_Clase: pmcId,
-          idperiodo,
-          estado,
-          nota: notaGuardada,
-          origen: OrigenHistorial.AUTOREPORTE,
-          createdAt: new Date(),
-        });
-      }
-    }
-
-    if (aCrear.length > 0 || aActualizar.length > 0) {
-      await this.prisma.$transaction([
-        ...(aCrear.length > 0 ? [this.prisma.historialAcademico.createMany({ data: aCrear })] : []),
-        ...aActualizar.map((u) =>
-          this.prisma.historialAcademico.update({
-            where: { idHistorialAcademico: u.id },
-            data: { estado: u.estado, nota: u.nota },
-          }),
-        ),
-      ]);
-    }
-
-    return { totalFilas: filasDatos.length, registrados: aCrear.length + aActualizar.length, omitidos, errores };
-  }
-
-  // Parser CSV mínimo (sin dependencia externa): soporta campos entre
-  // comillas dobles con comas o comillas escapadas (""), suficiente para el
-  // formato fijo codigo,periodo,nota que espera importarHistorialCsv.
-  private parseCsvLine(line: string): string[] {
-    const campos: string[] = [];
-    let actual = '';
-    let entreComillas = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (entreComillas) {
-        if (c === '"') {
-          if (line[i + 1] === '"') {
-            actual += '"';
-            i++;
-          } else {
-            entreComillas = false;
-          }
-        } else {
-          actual += c;
-        }
-      } else if (c === '"') {
-        entreComillas = true;
-      } else if (c === ',') {
-        campos.push(actual.trim());
-        actual = '';
-      } else {
-        actual += c;
-      }
-    }
-    campos.push(actual.trim());
-    return campos;
   }
 
   async registrarHistorial(userId: string, dto: RegistrarHistorialDto) {

@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
@@ -12,6 +14,7 @@ import * as bcrypt from 'bcrypt';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { RegistroDto } from './dto/registro.dto';
 import {
   AccessTokenPayload,
   RefreshTokenPayload,
@@ -30,12 +33,15 @@ export interface SessionTokens {
 }
 
 const GENERIC_AUTH_ERROR = 'Correo o contraseña incorrectos.';
+const STUDENT_ROLE_ID = 'ROL-EST';
+const BCRYPT_ROUNDS = 12;
 const NO_ROLE_ERROR =
   'Tu cuenta no tiene un rol asignado. Contacta al administrador del sistema.';
 
 @Injectable()
 export class AuthService {
   private readonly institutionalDomains: string[];
+  private readonly studentDomain: string | null;
   private readonly maxAttempts: number;
   private readonly lockoutMinutes: number;
   private readonly accessSecret: string;
@@ -54,6 +60,8 @@ export class AuthService {
     ]
       .filter((domain): domain is string => !!domain)
       .map((domain) => domain.toLowerCase());
+    this.studentDomain =
+      this.config.get<string>('INSTITUTIONAL_EMAIL_DOMAIN_ESTUDIANT')?.toLowerCase() || null;
     this.maxAttempts = Number(this.config.get('MAX_LOGIN_ATTEMPTS') ?? 5);
     this.lockoutMinutes = Number(this.config.get('LOGIN_LOCKOUT_MINUTES') ?? 15);
     this.accessSecret = this.config.get<string>('JWT_ACCESS_SECRET') ?? '';
@@ -66,7 +74,11 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
 
     if (!this.institutionalDomains.some((domain) => email.endsWith(domain))) {
-      throw new UnauthorizedException(GENERIC_AUTH_ERROR);
+      // El dominio no revela si la cuenta existe, así que se puede indicar
+      // explícitamente cuáles son los correos aceptados.
+      throw new BadRequestException(
+        `El correo debe ser institucional (${this.institutionalDomains.join(' o ')}).`,
+      );
     }
 
     // correoInstitucional no tiene restricción UNIQUE en la BD real, así que
@@ -77,20 +89,18 @@ export class AuthService {
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      const minutesLeft = Math.max(
-        1,
-        Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000),
-      );
-      throw new HttpException(
-        `Cuenta bloqueada temporalmente por múltiples intentos fallidos. Intenta nuevamente en ${minutesLeft} minuto(s).`,
-        423, // HTTP 423 Locked (no está en el enum HttpStatus de esta versión de @nestjs/common)
-      );
+      throw this.lockedException(user.lockedUntil);
     }
 
     const passwordMatches =
       !!user.passwordHash && (await bcrypt.compare(dto.password, user.passwordHash));
     if (!passwordMatches) {
-      await this.registerFailedAttempt(user);
+      const lockedUntil = await this.registerFailedAttempt(user);
+      // El intento que alcanza el máximo ya bloquea la cuenta: se informa en
+      // esta misma respuesta en vez de esperar al siguiente intento.
+      if (lockedUntil) {
+        throw this.lockedException(lockedUntil);
+      }
       throw new UnauthorizedException(GENERIC_AUTH_ERROR);
     }
 
@@ -100,6 +110,51 @@ export class AuthService {
         data: { failedLoginAttempts: 0, lockedUntil: null },
       });
     }
+
+    return this.issueSession(user, userAgent);
+  }
+
+  // Auto-registro del estudiante en su primer ingreso. Solo el dominio de
+  // estudiantes puede registrarse: las cuentas de administrador no se crean
+  // desde aquí.
+  async registrar(dto: RegistroDto, userAgent?: string): Promise<SessionTokens> {
+    const email = dto.email.toLowerCase();
+
+    if (!this.studentDomain || !email.endsWith(this.studentDomain)) {
+      throw new BadRequestException(
+        this.studentDomain
+          ? `Solo los estudiantes pueden registrarse, con un correo ${this.studentDomain}.`
+          : 'El registro de estudiantes no está habilitado.',
+      );
+    }
+
+    // Ni el correo ni el código tienen UNIQUE en la BD real (ver login() y
+    // EstudianteService.actualizarPerfil), así que se valida aquí.
+    const [correoEnUso, codigoEnUso] = await Promise.all([
+      this.prisma.user.findFirst({ where: { correoInstitucional: email } }),
+      this.prisma.user.findFirst({ where: { codigoInstitucional: dto.codigoEstudiantil } }),
+    ]);
+    if (correoEnUso) {
+      throw new ConflictException('Ya existe una cuenta con ese correo. Inicia sesión.');
+    }
+    if (codigoEnUso) {
+      throw new ConflictException('Ese código estudiantil ya está en uso.');
+    }
+
+    const now = new Date();
+    const user = await this.prisma.user.create({
+      data: {
+        idUser: randomUUID(),
+        idRole: STUDENT_ROLE_ID,
+        correoInstitucional: email,
+        passwordHash: await bcrypt.hash(dto.password, BCRYPT_ROUNDS),
+        failedLoginAttempts: 0,
+        NombreCompleto: dto.nombreCompleto,
+        codigoInstitucional: dto.codigoEstudiantil,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
 
     return this.issueSession(user, userAgent);
   }
@@ -165,22 +220,40 @@ export class AuthService {
     }
   }
 
-  private async registerFailedAttempt(user: User): Promise<void> {
+  /** Registra el intento fallido; devuelve la fecha de desbloqueo si este intento bloqueó la cuenta. */
+  private async registerFailedAttempt(user: User): Promise<Date | null> {
     const attempts = (user.failedLoginAttempts ?? 0) + 1;
-    const shouldLock = attempts >= this.maxAttempts;
+    const lockedUntil =
+      attempts >= this.maxAttempts ? new Date(Date.now() + this.lockoutMinutes * 60000) : null;
 
     await this.prisma.user.update({
       where: { idUser: user.idUser },
-      data: shouldLock
-        ? {
-            failedLoginAttempts: 0,
-            lockedUntil: new Date(Date.now() + this.lockoutMinutes * 60000),
-          }
+      data: lockedUntil
+        ? { failedLoginAttempts: 0, lockedUntil }
         : { failedLoginAttempts: attempts },
     });
+
+    return lockedUntil;
+  }
+
+  private lockedException(lockedUntil: Date): HttpException {
+    const minutesLeft = Math.max(1, Math.ceil((lockedUntil.getTime() - Date.now()) / 60000));
+    return new HttpException(
+      `Cuenta bloqueada temporalmente por múltiples intentos fallidos. Intenta nuevamente en ${minutesLeft} minuto(s).`,
+      423, // HTTP 423 Locked (no está en el enum HttpStatus de esta versión de @nestjs/common)
+    );
   }
 
   private async issueSession(user: User, userAgent?: string): Promise<SessionTokens> {
+    // Se valida antes de crear la Session para no dejar filas huérfanas en la BD.
+    const role = ROLE_ID_MAP[user.idRole];
+    if (!role) {
+      // Credenciales correctas pero sin rol utilizable: es un problema de
+      // autorización (falta configurar el rol), no de autenticación, así que
+      // se distingue del error genérico de credenciales inválidas.
+      throw new ForbiddenException(NO_ROLE_ERROR);
+    }
+
     const sessionId = randomUUID();
     const refreshExpiresAt = new Date(Date.now() + this.parseTtlMs(this.refreshExpiresIn));
 
@@ -203,14 +276,6 @@ export class AuthService {
         expiresAt: refreshExpiresAt,
       },
     });
-
-    const role = ROLE_ID_MAP[user.idRole];
-    if (!role) {
-      // Credenciales correctas pero sin rol utilizable: es un problema de
-      // autorización (falta configurar el rol), no de autenticación, así que
-      // se distingue del error genérico de credenciales inválidas.
-      throw new ForbiddenException(NO_ROLE_ERROR);
-    }
 
     const accessPayload: AccessTokenPayload = {
       sub: user.idUser,

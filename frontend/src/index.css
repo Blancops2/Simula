@@ -547,6 +547,13 @@ select:focus {
   color: var(--color-text-secondary);
 }
 
+.login-switch {
+  margin: 0;
+  font-size: 13px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
 .login-error {
   color: var(--color-danger);
   background: var(--color-danger-soft);
@@ -1752,4 +1759,285 @@ select:focus {
 
 .simulacion-acciones > .tree-node-meta {
   margin-right: auto;
+}
+
+/* ==========================================================================
+   Carga de historial en PDF (extracción + verificación lado a lado)
+   ========================================================================== */
+
+.zona-carga-pdf {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 20px;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-subtle);
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.zona-carga-pdf-activa {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.zona-carga-pdf-deshabilitada {
+  opacity: 0.6;
+}
+
+.zona-carga-pdf-titulo {
+  margin: 0;
+  font-weight: 600;
+}
+
+.zona-carga-pdf-ayuda {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.archivo-en-proceso {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.indicador-procesando {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-accent);
+}
+
+.indicador-procesando::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-soft);
+  border-top-color: var(--color-accent);
+  animation: btn-spin 0.6s linear infinite;
+}
+
+.texto-secundario {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* La vista de verificación necesita todo el ancho disponible. */
+.app-main:has(.verificacion-pdf) {
+  max-width: none;
+}
+
+.verificacion-encabezado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.verificacion-encabezado h2 {
+  margin-bottom: 4px;
+}
+
+.verificacion-encabezado p {
+  margin: 0;
+}
+
+.verificacion-pdf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.verificacion-visor {
+  position: sticky;
+  top: 16px;
+  padding: 12px;
+}
+
+.verificacion-resultados {
+  min-width: 0;
+}
+
+.visor-pdf {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.visor-pdf-barra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.visor-pdf-nombre {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visor-pdf-marco {
+  width: 100%;
+  height: calc(100vh - 140px);
+  min-height: 480px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+}
+
+.indicadores-extraccion {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--color-navy-soft);
+  border-left: 4px solid var(--color-navy);
+  border-radius: var(--radius-md);
+  color: var(--color-navy-deep);
+}
+
+.indicadores-extraccion > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.indicadores-extraccion strong {
+  font-size: 16px;
+}
+
+.pestanas {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border-strong);
+  margin-bottom: 14px;
+}
+
+.pestana {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pestana:hover {
+  color: var(--color-text);
+}
+
+.pestana-activa {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+  font-weight: 600;
+}
+
+.pestana-contenido .field {
+  margin-bottom: 12px;
+}
+
+.tabla-compacta {
+  min-width: 0;
+}
+
+.tabla-compacta td,
+.tabla-compacta th {
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+.fila-navegable {
+  cursor: pointer;
+}
+
+.tabla-detectada {
+  margin-bottom: 20px;
+}
+
+.tabla-detectada-titulo,
+.pagina-texto-titulo {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pagina-texto {
+  margin-bottom: 18px;
+}
+
+.linea-pdf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 14px;
+}
+
+.segmento-pdf {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  margin-right: 4px;
+}
+
+.resultados-vacio {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.json-extraccion {
+  max-height: 70vh;
+  overflow: auto;
+  margin-top: 10px;
+  padding: 12px;
+  font-size: 12px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 1100px) {
+  .verificacion-pdf {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .verificacion-visor {
+    position: static;
+  }
+
+  .visor-pdf-marco {
+    height: 70vh;
+  }
 }

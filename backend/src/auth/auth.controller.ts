@@ -13,6 +13,7 @@ import type { CookieOptions, Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from './constants';
 import { LoginDto } from './dto/login.dto';
+import { RegistroDto } from './dto/registro.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -26,7 +27,8 @@ export class AuthController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Inicia sesión con correo institucional y contraseña.' })
   @ApiResponse({ status: 200, description: 'Sesión iniciada correctamente.' })
-  @ApiResponse({ status: 401, description: 'Credenciales o dominio inválidos.' })
+  @ApiResponse({ status: 400, description: 'Formato de correo inválido o dominio no institucional.' })
+  @ApiResponse({ status: 401, description: 'Credenciales inválidas.' })
   @ApiResponse({ status: 423, description: 'Cuenta bloqueada temporalmente.' })
   async login(
     @Body() dto: LoginDto,
@@ -34,6 +36,25 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { accessToken, refreshToken, user } = await this.authService.login(
+      dto,
+      req.headers['user-agent'],
+    );
+    this.setRefreshCookie(res, refreshToken);
+    return { accessToken, user };
+  }
+
+  @Post('registro')
+  @HttpCode(201)
+  @ApiOperation({ summary: 'Registra a un estudiante en su primer ingreso e inicia su sesión.' })
+  @ApiResponse({ status: 201, description: 'Cuenta creada y sesión iniciada.' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o correo que no es de estudiante.' })
+  @ApiResponse({ status: 409, description: 'El correo o el código estudiantil ya están registrados.' })
+  async registro(
+    @Body() dto: RegistroDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken, refreshToken, user } = await this.authService.registrar(
       dto,
       req.headers['user-agent'],
     );
