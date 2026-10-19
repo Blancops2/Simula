@@ -202,8 +202,9 @@ model HistorialAcademico {
   updatedAt                  DateTime?
   idPlantillaMalla_has_Clase String    @db.VarChar(45)
   idperiodo                  String    @db.VarChar(45)
+  seccion                    String?   @db.VarChar(45)
 
-  user                User                     @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
+  user                User                    @relation(fields: [idUser], references: [idUser], onUpdate: NoAction, map: "fk_HistorialAcademico_User1")
   plantillaMallaClase PlantillaMalla_has_Clase @relation(fields: [idPlantillaMalla_has_Clase], references: [idPlantillaMalla_has_Clase], onUpdate: NoAction, map: "fk_HistorialAcademico_PlantillaMalla_has_Clase1")
   periodo             Periodo                  @relation(fields: [idperiodo], references: [idperiodo], onUpdate: NoAction, map: "fk_HistorialAcademico_periodo1")
 }

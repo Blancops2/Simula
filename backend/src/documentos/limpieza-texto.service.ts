@@ -34,9 +34,11 @@ export function esNumeroDePagina(texto: string): boolean {
 
 const conTexto = (segments: string[]): TextLine['segments'] => segments.filter((s) => s.length > 0);
 
+// Las líneas limpias no conservan segmentsX: al filtrar o unir segmentos
+// dejaría de corresponder (solo las reglas lo usan, sobre las líneas crudas).
 function rehacerLinea(linea: TextLine, segments: string[]): TextLine {
   const limpios = conTexto(segments);
-  return { ...linea, segments: limpios, text: limpios.join(' ') };
+  return { y: linea.y, x: linea.x, segments: limpios, text: limpios.join(' ') };
 }
 
 @Injectable()

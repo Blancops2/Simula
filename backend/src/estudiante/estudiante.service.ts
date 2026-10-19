@@ -20,6 +20,7 @@ import {
   TipoRequisito,
 } from '../common/enums';
 import { RequestUser } from '../auth/decorators/current-user.decorator';
+import { esPeriodoSinPeriodo } from '../common/periodo-sin-periodo';
 import { CurriculumService, ClaseView, PlantillaArbol, RequisitoView } from '../curriculum/curriculum.service';
 import { PeriodoService, PeriodoView } from '../periodo/periodo.service';
 import { PlanEstudioService } from '../plan-estudio/plan-estudio.service';
@@ -1470,12 +1471,15 @@ export class EstudianteService {
       include: { plantillaMallaClase: { include: { clase: true, posicion: true } }, periodo: true },
       orderBy: [{ periodo: { anno: 'desc' } }, { periodo: { periodo: 'desc' } }, { createdAt: 'desc' }],
     });
+    // Las equivalencias usan el período reservado "0000": se devuelven sin
+    // período (no se cursaron en un período de esta universidad).
     return historial.map((h) => ({
       id: h.idHistorialAcademico,
-      periodo: h.periodo.periodo,
-      anno: h.periodo.anno,
+      periodo: esPeriodoSinPeriodo(h.periodo) ? null : h.periodo.periodo,
+      anno: esPeriodoSinPeriodo(h.periodo) ? null : h.periodo.anno,
       estado: h.estado,
       nota: h.nota,
+      origen: h.origen,
       clase: {
         codigo: h.plantillaMallaClase.clase.codigo,
         nombre: h.plantillaMallaClase.clase.nombre,

@@ -1,10 +1,17 @@
-import { RawPage, TextLine } from './extraccion.types';
+import { RawLine, RawPage } from './extraccion.types';
 import { LimpiezaTextoService, esNumeroDePagina, normalizarTexto } from './limpieza-texto.service';
 
 // Página carta: 792 pt de alto → franja de margen por encima de 697 y por debajo de 95.
 const ALTO = 792;
-const linea = (y: number, ...segments: string[]): TextLine => ({ y, x: 56, segments, text: segments.join(' ') });
-const pagina = (page: number, ...lines: TextLine[]): RawPage => ({ page, width: 612, height: ALTO, lines });
+const linea = (y: number, ...segments: string[]): RawLine => ({
+  y,
+  x: 56,
+  segments,
+  segmentsX: segments.map((_, i) => 56 + i * 150),
+  segmentsEndX: segments.map((_, i) => 56 + i * 150 + 100),
+  text: segments.join(' '),
+});
+const pagina = (page: number, ...lines: RawLine[]): RawPage => ({ page, width: 612, height: ALTO, lines });
 
 describe('normalizarTexto', () => {
   it('normaliza Unicode, quita invisibles, unifica espacios y comillas', () => {

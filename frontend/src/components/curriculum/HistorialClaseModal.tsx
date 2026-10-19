@@ -1,3 +1,4 @@
+import { estadoHistorial } from '../../estudiante/estadoHistorial';
 import { formatPeriodo } from '../../estudiante/periodo';
 import type { ClasePensum, HistorialItem } from '../../estudiante/types';
 
@@ -7,16 +8,9 @@ interface HistorialClaseModalProps {
   onClose: () => void;
 }
 
-const ETIQUETAS_ESTADO: Record<HistorialItem['estado'], string> = {
-  APROBADA: 'Aprobada',
-  REPROBADA: 'Reprobada',
-  EN_CURSO: 'En curso',
-  NSP: 'No se presentó',
-};
-
 // Solo lectura: el historial de una clase (una fila por vez que se cursó) ya
-// no se edita desde el Pensum, se sube por CSV o lo carga el administrador
-// (ver docs/subir-historial.md). Este modal solo muestra lo que ya existe.
+// no se edita desde el Pensum, se sube desde el PDF del historial o lo carga
+// el administrador. Este modal solo muestra lo que ya existe.
 export function HistorialClaseModal({ clase, historial, onClose }: HistorialClaseModalProps) {
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -47,7 +41,7 @@ export function HistorialClaseModal({ clase, historial, onClose }: HistorialClas
                   <tr key={h.id}>
                     <td>{formatPeriodo(h.periodo, h.anno)}</td>
                     <td>
-                      <span className={`badge status-${h.estado.toLowerCase()}`}>{ETIQUETAS_ESTADO[h.estado]}</span>
+                      <span className={`badge ${estadoHistorial(h).clase}`}>{estadoHistorial(h).etiqueta}</span>
                     </td>
                     <td>{h.nota ?? '—'}</td>
                   </tr>

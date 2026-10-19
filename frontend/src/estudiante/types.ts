@@ -65,10 +65,13 @@ export interface PerfilEstudiante {
 
 export interface HistorialItem {
   id: string;
-  periodo: string;
+  // null en las equivalencias (sin período en esta universidad).
+  periodo: string | null;
   anno: string | null;
-  estado: EstadoHistorial;
+  // Las equivalencias vienen APROBADA, sin nota ni período.
+  estado: EstadoHistorial | null;
   nota: number | null;
+  origen: 'ADMIN' | 'AUTOREPORTE' | 'EQUIVALENCIA' | null;
   clase: { codigo: string; nombre: string; unidadesValorativas: number; nivel: number };
 }
 
@@ -242,5 +245,44 @@ export interface InscripcionItem {
     unidadesValorativas: number;
     nivel: number;
     tipo: TipoClase;
+  };
+}
+
+// Respuesta de POST /estudiante/historial/guardar-pdf.
+// SINCRONIZAR con ResultadoGuardadoHistorial en
+// backend/src/estudiante/guardar-historial-pdf.service.ts.
+export interface MallaDetectada {
+  id: string;
+  nombre: string | null;
+  version: number | null;
+  activa: boolean;
+  coincidencias: number;
+}
+
+export interface ClaseNoCargada {
+  codigo: string;
+  asignatura: string;
+  periodo: string;
+  motivo: string;
+  page: number;
+}
+
+export interface ResultadoGuardadoHistorial {
+  carrera: { id: string; nombre: string | null };
+  malla: MallaDetectada;
+  mallaAlternativa: MallaDetectada | null;
+  totalClases: number;
+  creadas: number;
+  actualizadas: number;
+  omitidasAdmin: number;
+  noCargadas: ClaseNoCargada[];
+  // Las que no están en la malla van en `noCargadas` (período "Equivalencia").
+  equivalencias: {
+    encontradas: number;
+    creadas: number;
+    actualizadas: number;
+    omitidasAdmin: number;
+    // false si aún no existe el período reservado "0000": no se guardan.
+    periodoReservadoDisponible: boolean;
   };
 }

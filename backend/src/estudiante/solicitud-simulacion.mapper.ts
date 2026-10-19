@@ -164,10 +164,14 @@ export function mapearEstudiante(datos: {
 // Nivel y obligatoriedad salen de la malla ACTUAL cruzando por código
 // (igual que construirMallaConEstado), y quedan en null si la clase ya no
 // pertenece a ella.
+// Las equivalencias (clases acreditadas de otra institución, período
+// reservado "0000", sin nota) no se envían: no son intentos cursados aquí y
+// el contrato v1.3 solo admite origen ADMIN/AUTOREPORTE. Igual cuentan como
+// aprobadas en la malla, y por eso en el avance que sí se envía.
 export function mapearHistorial(registros: RegistroHistorialMapeo[], malla: MallaConEstado): HistorialModelo[] {
   const clasesPorCodigo = new Map(malla.niveles.flatMap((n) => n.clases).map((c) => [c.codigo, c]));
   return registros
-    .filter((h) => ESTADOS_HISTORIAL_MODELO.has(h.estado ?? ''))
+    .filter((h) => ESTADOS_HISTORIAL_MODELO.has(h.estado ?? '') && h.origen !== OrigenHistorial.EQUIVALENCIA)
     .map((h): HistorialModelo => {
       const codigo = h.plantillaMallaClase.clase.codigo ?? '';
       const claseActual = clasesPorCodigo.get(codigo);

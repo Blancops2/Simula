@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { randomUUID } from 'crypto';
 import { RequestUser } from '../auth/decorators/current-user.decorator';
 import { EstadoPeriodo } from '../common/enums';
+import { ANNO_SIN_PERIODO, esPeriodoSinPeriodo } from '../common/periodo-sin-periodo';
 import { PrismaService } from '../prisma/prisma.service';
 import { CambiarEstadoPeriodoDto } from './dto/cambiar-estado-periodo.dto';
 import { CreatePeriodoDto } from './dto/create-periodo.dto';
@@ -50,8 +51,11 @@ export class PeriodoService {
     return this.toView(creado);
   }
 
+  // El período reservado para clases sin período (año "0000") no se lista:
+  // es un registro del sistema, no un período académico.
   async listar(): Promise<PeriodoView[]> {
     const periodos = await this.prisma.periodo.findMany({
+      where: { anno: { not: ANNO_SIN_PERIODO } },
       orderBy: [{ anno: 'desc' }, { periodo: 'desc' }],
     });
     return periodos.map((p) => this.toView(p));
@@ -62,7 +66,7 @@ export class PeriodoService {
   // dejó habilitados.
   async listarHabilitados(): Promise<PeriodoView[]> {
     const periodos = await this.prisma.periodo.findMany({
-      where: { estado: EstadoPeriodo.HABILITADO },
+      where: { estado: EstadoPeriodo.HABILITADO, anno: { not: ANNO_SIN_PERIODO } },
       orderBy: [{ anno: 'desc' }, { periodo: 'desc' }],
     });
     return periodos.map((p) => this.toView(p));
@@ -77,6 +81,7 @@ export class PeriodoService {
     if (!actual) {
       throw new NotFoundException('El período indicado no existe.');
     }
+    this.rechazarPeriodoSinPeriodo(actual);
 
     // Si el estado ya es el solicitado no hay "cambio" que auditar (criterio
     // 5): se devuelve el período tal cual, sin tocar Auditoria.
@@ -125,6 +130,7 @@ export class PeriodoService {
     if (!nuevo) {
       throw new NotFoundException('El período indicado no existe.');
     }
+    this.rechazarPeriodoSinPeriodo(nuevo);
     if (nuevo.periodoActual) {
       return this.toView(nuevo);
     }
@@ -172,6 +178,7 @@ export class PeriodoService {
     if (!actual) {
       throw new NotFoundException('El período indicado no existe.');
     }
+    this.rechazarPeriodoSinPeriodo(actual);
 
     const anno = dto.anno !== undefined ? String(dto.anno) : (actual.anno ?? '');
     const periodo = dto.periodo !== undefined ? String(dto.periodo) : (actual.periodo ?? '');
@@ -219,5 +226,13 @@ export class PeriodoService {
       fechaFin: p.fechaFin,
       periodoActual: p.periodoActual,
     };
+  }
+
+  private rechazarPeriodoSinPeriodo(periodo: { anno: string | null }) {
+    if (esPeriodoSinPeriodo(periodo)) {
+      throw new BadRequestException(
+        'Este período está reservado por el sistema para clases sin período y no se puede modificar.',
+      );
+    }
   }
 }

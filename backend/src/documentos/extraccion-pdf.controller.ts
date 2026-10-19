@@ -35,6 +35,24 @@ import { ExtraccionPdfService } from './extraccion-pdf.service';
 export const TAMANO_MAXIMO_PDF = 10 * 1024 * 1024;
 const FIRMA_PDF = '%PDF-';
 
+// Configuración de Multer compartida por los endpoints que reciben el PDF:
+// en memoria (nunca en disco), un solo archivo de hasta 10 MB.
+export const OPCIONES_ARCHIVO_PDF = { storage: memoryStorage(), limits: { fileSize: TAMANO_MAXIMO_PDF, files: 1 } };
+
+// Valida el archivo recibido y devuelve su nombre. Se valida por contenido
+// (firma %PDF-), no por extensión ni MIME.
+export function validarArchivoPdf(file?: Express.Multer.File): string {
+  if (!file || !file.buffer?.length) {
+    throw new BadRequestException('Debes adjuntar el PDF de tu historial académico en el campo "file".');
+  }
+  if (file.buffer.subarray(0, FIRMA_PDF.length).toString('latin1') !== FIRMA_PDF) {
+    throw new BadRequestException('El archivo no es un PDF válido.');
+  }
+  // Busboy decodifica el nombre como latin1; se recupera el UTF-8 original
+  // para que los nombres con tildes no lleguen corruptos.
+  return Buffer.from(file.originalname, 'latin1').toString('utf8');
+}
+
 // Multer lanza el 413 con su propio mensaje en inglés ("File too large");
 // se reescribe para que el cliente reciba el mismo idioma que el resto de la API.
 @Catch(PayloadTooLargeException)
@@ -59,7 +77,7 @@ export class ExtraccionPdfController {
   @Post('extraer-pdf')
   @HttpCode(200)
   @UseFilters(ArchivoDemasiadoGrandeFilter)
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: TAMANO_MAXIMO_PDF, files: 1 } }))
+  @UseInterceptors(FileInterceptor('file', OPCIONES_ARCHIVO_PDF))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -73,21 +91,16 @@ export class ExtraccionPdfController {
       'Extrae el texto del historial académico en PDF digital y detecta campos "Clave: valor", tablas y tipos de ' +
       'dato. Solo lectura: el archivo se procesa en memoria y no se guarda nada (ni el PDF ni el historial).',
   })
-  @ApiOkResponse({ description: 'ExtractionResult: campos, tablas, líneas limpias/descartadas y texto crudo.' })
+  @ApiOkResponse({
+    description:
+      'ExtractionResult: en `historial`, número de cuenta, nombre, carrera y la tabla del historial unida a través ' +
+      'de todas las páginas; además, el resultado genérico (campos, tablas, líneas limpias/descartadas, texto crudo).',
+  })
   @ApiBadRequestResponse({ description: 'No se adjuntó archivo, no es un PDF, o el PDF está dañado/protegido con contraseña.' })
   @ApiPayloadTooLargeResponse({ description: 'El archivo supera 10 MB.' })
   @ApiUnprocessableEntityResponse({ description: 'El PDF no tiene capa de texto (escaneado); no se soporta OCR.' })
   extraer(@UploadedFile() file?: Express.Multer.File) {
-    if (!file || !file.buffer?.length) {
-      throw new BadRequestException('Debes adjuntar el PDF de tu historial académico en el campo "file".');
-    }
-    // Se valida por contenido, no por extensión ni MIME.
-    if (file.buffer.subarray(0, FIRMA_PDF.length).toString('latin1') !== FIRMA_PDF) {
-      throw new BadRequestException('El archivo no es un PDF válido.');
-    }
-    // Busboy decodifica el nombre como latin1; se recupera el UTF-8 original
-    // para que los nombres con tildes no lleguen corruptos.
-    const fileName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    return this.extraccion.extraer(fileName, file.buffer);
+    const fileName = validarArchivoPdf(file);
+    return this.extraccion.extraer(fileName, file!.buffer);
   }
 }

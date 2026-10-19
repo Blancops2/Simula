@@ -8,6 +8,7 @@ import type {
   PlanEstudioPeriodoConEstado,
   RecomendacionClases,
   RecomendacionPeriodo,
+  ResultadoGuardadoHistorial,
   ResumenAcademico,
   SimulacionCarga,
   SimulacionesPeriodoActual,
@@ -118,6 +119,17 @@ export async function extraerHistorialPdf(archivo: File, signal?: AbortSignal): 
   const { data } = await httpClient.post<ExtractionResult>('/estudiante/historial/extraer-pdf', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     signal,
+  });
+  return data;
+}
+
+// Vuelve a enviar el mismo PDF ya verificado: el backend lo extrae de nuevo
+// y guarda (no se envían los datos extraídos desde el navegador).
+export async function guardarHistorialPdf(archivo: File): Promise<ResultadoGuardadoHistorial> {
+  const formData = new FormData();
+  formData.append('file', archivo);
+  const { data } = await httpClient.post<ResultadoGuardadoHistorial>('/estudiante/historial/guardar-pdf', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
   });
   return data;
 }

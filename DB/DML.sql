@@ -399,7 +399,11 @@ INSERT INTO periodo (idperiodo, periodo, anno, estado, FechaInicio, fechaFin, cr
 ('PER-2025-1', '1', '2025', 'habilitado',    '2025-01-13', '2025-06-06', SYSDATETIME(), SYSDATETIME(), 0),
 ('PER-2025-2', '2', '2025', 'habilitado',    '2025-07-14', '2025-12-05', SYSDATETIME(), SYSDATETIME(), 0),
 ('PER-2026-1', '1', '2026', 'habilitado',    '2026-01-12', '2026-06-05', SYSDATETIME(), SYSDATETIME(), 1),
-('PER-2026-2', '2', '2026', 'deshabilitado', '2026-07-13', '2026-12-04', SYSDATETIME(), SYSDATETIME(), 0);
+('PER-2026-2', '2', '2026', 'deshabilitado', '2026-07-13', '2026-12-04', SYSDATETIME(), SYSDATETIME(), 0),
+-- Periodo reservado para clases sin periodo (equivalencias): anno '0000',
+-- deshabilitado y sin fechas. Ver backend/src/common/periodo-sin-periodo.ts y
+-- backend/prisma/migrations/proposed/2026-10-19_periodo_sin_periodo.sql.
+('PER-0000-0', '0', '0000', 'deshabilitado', NULL,         NULL,         SYSDATETIME(), SYSDATETIME(), 0);
 GO
 
 /* =====================================================================

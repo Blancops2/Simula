@@ -17,11 +17,19 @@ export interface TextLine {
   text: string;
 }
 
+// Línea antes de limpiar: además guarda dónde empieza y termina cada
+// segmento, para reconocer encabezados de tabla en varias líneas y ubicar
+// en su columna las filas con celdas vacías.
+export interface RawLine extends TextLine {
+  segmentsX: number[];
+  segmentsEndX: number[];
+}
+
 export interface RawPage {
   page: number;
   width: number;
   height: number;
-  lines: TextLine[];
+  lines: RawLine[];
 }
 
 export interface CleanPage {
@@ -51,6 +59,42 @@ export interface RemovedLine {
   reason: MotivoDescarte;
 }
 
+// ---- Reglas del historial académico (capa por tipo de documento) ----
+
+export interface DatoEstudiante {
+  // Etiqueta tal como aparece en el PDF (ej. "No. cuenta"); null si no se encontró.
+  etiqueta: string | null;
+  valor: string | null;
+  page: number | null;
+}
+
+export interface FilaHistorial {
+  page: number;
+  cells: string[];
+}
+
+export interface TablaClases {
+  columns: string[];
+  rows: FilaHistorial[];
+}
+
+export interface HistorialExtraido {
+  estudiante: {
+    numeroCuenta: DatoEstudiante;
+    nombre: DatoEstudiante;
+    carrera: DatoEstudiante;
+  };
+  // Tabla del historial unida a través de todas las páginas: un solo
+  // encabezado y todas las filas en orden. null si no se encontró.
+  clases: TablaClases | null;
+  // Clases cursadas en otra institución y acreditadas por equivalencia
+  // (sección aparte del PDF). null si el PDF no tiene equivalencias; no es
+  // un dato obligatorio, así que no cuenta como faltante.
+  equivalencias: TablaClases | null;
+  // Datos esperados que no aparecieron en el PDF.
+  faltantes: string[];
+}
+
 export interface ExtractionResult {
   fileName: string;
   fileSize: number;
@@ -70,4 +114,5 @@ export interface ExtractionResult {
   cleanPages: CleanPage[];
   rawPages: RawPage[];
   cleanText: string;
+  historial: HistorialExtraido;
 }

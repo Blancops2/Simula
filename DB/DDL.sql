@@ -48,6 +48,13 @@
           coincida con el real (anno al final, por haberse agregado con
           ALTER TABLE ... ADD en 2026-09-14_plan_estudio_anno.sql en vez de
           ir en medio de la definición original).
+
+   ACTUALIZACIÓN (2026-10-18):
+     HistorialAcademico gana la columna "seccion" VARCHAR(45) NULL (al
+     final, igual que quedaría con ALTER TABLE ... ADD). Ya APLICADA
+     contra db_simula_local (2026-10-18); Azure real sigue pendiente de
+     aprobación. Ver
+     backend/prisma/migrations/proposed/2026-10-18_historial_seccion.sql.
    ===================================================================== */
 
 -- =====================================================================
@@ -269,6 +276,8 @@ CREATE TABLE HistorialAcademico (
     updatedAt                    DATETIME2   NULL,
     idPlantillaMalla_has_Clase   VARCHAR(45) NOT NULL,
     idperiodo                    VARCHAR(45) NOT NULL,
+    -- Sección en la que se cursó la clase (2026-10-18_historial_seccion.sql).
+    seccion                      VARCHAR(45) NULL,
     CONSTRAINT PK_HistorialAcademico PRIMARY KEY (idHistorialAcademico)
 );
 GO

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { extractTextItems, getMeta, getResolvedPDFJS } from 'unpdf';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'unpdf/pdfjs';
-import { RawPage, TextLine } from './extraccion.types';
+import { RawLine, RawPage } from './extraccion.types';
 
 // Fragmento suelto tal como lo entrega pdf.js: coordenadas PDF, con y = 0
 // en el borde INFERIOR de la página.
@@ -33,7 +33,7 @@ const altoDe = (f: Fragmento) => (f.height > 0 ? f.height : ALTO_POR_DEFECTO);
 // 2. misma línea si la y difiere menos de la mitad del alto (mín. 2 pt);
 // 3. nuevo segmento (columna) si el hueco horizontal supera 1,5 × alto
 //    (mín. 8 pt); si no, se separa con un espacio entre palabras.
-export function reconstruirLineas(fragmentos: Fragmento[]): TextLine[] {
+export function reconstruirLineas(fragmentos: Fragmento[]): RawLine[] {
   const ordenados = fragmentos
     .filter((f) => f.text.trim().length > 0)
     .sort((a, b) => b.y - a.y || a.x - b.x);
@@ -56,6 +56,8 @@ export function reconstruirLineas(fragmentos: Fragmento[]): TextLine[] {
     // Dentro de la línea, una y apenas distinta pudo alterar el orden.
     grupo.sort((a, b) => a.x - b.x);
     const segments: string[] = [];
+    const segmentsX: number[] = [grupo[0].x];
+    const segmentsEndX: number[] = [];
     let segmento = grupo[0].text;
     for (let i = 1; i < grupo.length; i++) {
       const prev = grupo[i - 1];
@@ -64,6 +66,8 @@ export function reconstruirLineas(fragmentos: Fragmento[]): TextLine[] {
       const hueco = f.x - (prev.x + prev.width);
       if (hueco > Math.max(1.5 * alto, 8)) {
         segments.push(segmento);
+        segmentsEndX.push(prev.x + prev.width);
+        segmentsX.push(f.x);
         segmento = f.text;
       } else if (hueco <= alto * FACTOR_FRAGMENTOS_PEGADOS) {
         segmento += f.text;
@@ -72,11 +76,18 @@ export function reconstruirLineas(fragmentos: Fragmento[]): TextLine[] {
       }
     }
     segments.push(segmento);
-    const limpios = segments.map((s) => s.trim()).filter((s) => s.length > 0);
+    const ultimo = grupo[grupo.length - 1];
+    segmentsEndX.push(ultimo.x + ultimo.width);
+    const conTexto = segments
+      .map((s, i) => [s.trim(), segmentsX[i], segmentsEndX[i]] as const)
+      .filter(([s]) => s.length > 0);
+    const limpios = conTexto.map(([s]) => s);
     return {
       y: redondear(grupo[0].y),
       x: redondear(grupo[0].x),
       segments: limpios,
+      segmentsX: conTexto.map(([, x]) => redondear(x)),
+      segmentsEndX: conTexto.map(([, , fin]) => redondear(fin)),
       text: limpios.join(' '),
     };
   });

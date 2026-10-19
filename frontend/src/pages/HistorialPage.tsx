@@ -1,15 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getHistorial } from '../api/estudianteApi';
 import { AppShell } from '../components/AppShell';
+import { estadoHistorial } from '../estudiante/estadoHistorial';
 import { formatPeriodo } from '../estudiante/periodo';
 import type { HistorialItem } from '../estudiante/types';
-
-const ETIQUETAS_ESTADO: Record<HistorialItem['estado'], string> = {
-  APROBADA: 'Aprobada',
-  REPROBADA: 'Reprobada',
-  EN_CURSO: 'En curso',
-  NSP: 'No se presentó',
-};
 
 export function HistorialPage() {
   const [historial, setHistorial] = useState<HistorialItem[]>([]);
@@ -57,9 +51,7 @@ export function HistorialPage() {
                     <td>{formatPeriodo(h.periodo, h.anno)}</td>
                     <td>{h.anno ?? '—'}</td>
                     <td>
-                      <span className={`badge status-${h.estado.toLowerCase()}`}>
-                        {ETIQUETAS_ESTADO[h.estado]}
-                      </span>
+                      <span className={`badge ${estadoHistorial(h).clase}`}>{estadoHistorial(h).etiqueta}</span>
                     </td>
                     <td>{h.nota ?? '—'}</td>
                   </tr>

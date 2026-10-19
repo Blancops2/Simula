@@ -123,10 +123,9 @@ export function separarClaveValor(segmento: string): { key: string; value: strin
   return { key, value };
 }
 
-// Interpretación GENÉRICA: no conoce campos del negocio. Una futura capa de
-// reglas por tipo de documento puede trabajar sobre este resultado (buscar
-// campos por keyNormalized y validar su `type` con detectarTipo) sin tocar
-// la extracción ni la limpieza.
+// Interpretación GENÉRICA: no conoce campos del negocio. Las reglas por tipo
+// de documento (ver ReglasHistorialService) trabajan sobre este resultado,
+// buscando campos por keyNormalized, sin tocar la extracción ni la limpieza.
 @Injectable()
 export class InterpretacionService {
   interpretar(pages: CleanPage[]): ResultadoInterpretacion {

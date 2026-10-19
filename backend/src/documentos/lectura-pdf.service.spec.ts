@@ -70,7 +70,21 @@ describe('LecturaPdfService', () => {
     expect(doc.pageCount).toBe(2);
     expect(doc.metadata).toMatchObject({ Title: 'Historial', Author: 'Registro' });
     expect(doc.pages[0]).toMatchObject({ page: 1, width: 612, height: 792 });
-    expect(doc.pages[0].lines).toEqual([{ y: 700, x: 56, segments: ['Carrera:', 'Ingeniería'], text: 'Carrera: Ingeniería' }]);
+    expect(doc.pages[0].lines).toEqual([
+      {
+        y: 700,
+        x: 56,
+        segments: ['Carrera:', 'Ingeniería'],
+        segmentsX: [56, 200],
+        segmentsEndX: [expect.any(Number), expect.any(Number)],
+        text: 'Carrera: Ingeniería',
+      },
+    ]);
+    // Cada segmento termina después de empezar y antes del siguiente.
+    const [fin1, fin2] = doc.pages[0].lines[0].segmentsEndX;
+    expect(fin1).toBeGreaterThan(56);
+    expect(fin1).toBeLessThan(200);
+    expect(fin2).toBeGreaterThan(200);
     expect(doc.pages[1].lines.map((l) => l.text)).toEqual(['Fin']);
   });
 

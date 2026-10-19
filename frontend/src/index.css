@@ -1905,11 +1905,23 @@ select:focus {
   background: var(--color-bg-subtle);
 }
 
-.indicadores-extraccion {
+.resultado-historial h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.seccion-clases {
+  margin-bottom: 22px;
+}
+
+.datos-estudiante {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   padding: 12px 16px;
   background: var(--color-navy-soft);
   border-left: 4px solid var(--color-navy);
@@ -1917,52 +1929,12 @@ select:focus {
   color: var(--color-navy-deep);
 }
 
-.indicadores-extraccion > div {
+.dato-estudiante {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
-}
-
-.indicadores-extraccion strong {
-  font-size: 16px;
-}
-
-.pestanas {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--color-border-strong);
-  margin-bottom: 14px;
-}
-
-.pestana {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  font: inherit;
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.pestana:hover {
-  color: var(--color-text);
-}
-
-.pestana-activa {
-  color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
-  font-weight: 600;
-}
-
-.pestana-contenido .field {
-  margin-bottom: 12px;
+  overflow-wrap: anywhere;
 }
 
 .tabla-compacta {
@@ -1977,55 +1949,6 @@ select:focus {
 
 .fila-navegable {
   cursor: pointer;
-}
-
-.tabla-detectada {
-  margin-bottom: 20px;
-}
-
-.tabla-detectada-titulo,
-.pagina-texto-titulo {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.pagina-texto {
-  margin-bottom: 18px;
-}
-
-.linea-pdf {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 3px 0;
-  font-size: 14px;
-}
-
-.segmento-pdf {
-  display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-accent-soft);
-  margin-right: 4px;
-}
-
-.resultados-vacio {
-  color: var(--color-text-secondary);
-  font-size: 14px;
-}
-
-.json-extraccion {
-  max-height: 70vh;
-  overflow: auto;
-  margin-top: 10px;
-  padding: 12px;
-  font-size: 12px;
-  background: var(--color-bg-subtle);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
 }
 
 @media (max-width: 1100px) {

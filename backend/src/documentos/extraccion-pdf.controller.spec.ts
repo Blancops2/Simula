@@ -5,7 +5,18 @@ import { Role } from '../common/enums';
 import { DocumentosModule } from './documentos.module';
 import { ExtractionResult } from './extraccion.types';
 import { TAMANO_MAXIMO_PDF } from './extraccion-pdf.controller';
-import { construirPdf, historialDeMuestra } from './testing/construir-pdf';
+import {
+  COLUMNAS_EQUIVALENCIAS,
+  COLUMNAS_EQUIVALENCIAS_UNAH,
+  COLUMNAS_HISTORIAL,
+  construirPdf,
+  equivalenciasConTituloAlPie,
+  equivalenciasConTituloPartidoYCeldasVacias,
+  equivalenciasEstiloUnah,
+  historialConEquivalencias,
+  historialDeMuestra,
+  historialMultipagina,
+} from './testing/construir-pdf';
 
 // Prueba HTTP real (Multer incluido) sin depender de JWT: se reemplaza la
 // estrategia "jwt" de passport por una que autentica a un estudiante fijo.
@@ -71,6 +82,89 @@ describe('POST /estudiante/historial/extraer-pdf', () => {
     ]);
     expect(r.cleanText).not.toMatch(/Página \d de 2/);
     expect(r.rawPages[0].lines[0]).toMatchObject({ y: 760, x: 56 });
+
+    expect(r.historial.estudiante.nombre.valor).toBe('Ana María López');
+    expect(r.historial.estudiante.carrera.valor).toBe('Ingeniería en Sistemas');
+    expect(r.historial.faltantes).toEqual(['Número de cuenta']);
+    expect(r.historial.clases?.rows).toHaveLength(2);
+  });
+
+  it('200: une el historial de varias páginas en una sola tabla sin perder filas', async () => {
+    const res = await enviar(historialMultipagina());
+    expect(res.status).toBe(200);
+    const { historial, stats } = (await res.json()) as ExtractionResult;
+
+    expect(historial.estudiante).toEqual({
+      numeroCuenta: { etiqueta: 'No. cuenta', valor: '0020240099', page: 1 },
+      nombre: { etiqueta: 'Nombre', valor: 'Daniela Sofía Ramírez Ortega', page: 1 },
+      carrera: { etiqueta: 'Carrera', valor: 'Ingeniería de Sistemas', page: 1 },
+    });
+    expect(historial.faltantes).toEqual([]);
+    // La detección genérica ve varias tablas; el historial es una sola.
+    expect(stats.tables).toBeGreaterThan(1);
+    expect(historial.clases?.columns).toEqual(COLUMNAS_HISTORIAL);
+    const rows = historial.clases!.rows;
+    // 20 + 30 + 1 filas; incluye las que caen en el margen superior de las
+    // páginas 2 y 3, que la limpieza genérica descarta como "repetidas".
+    expect(rows).toHaveLength(51);
+    expect(rows.map((f) => f.cells[0])).toEqual(Array.from({ length: 51 }, (_, i) => `MAT-${101 + i}`));
+    expect(rows.filter((f) => f.page === 3)).toHaveLength(1);
+    // UV/CA (unidades valorativas) se conserva en su posición, después de Asignatura.
+    expect(rows[0].cells.slice(1, 3)).toEqual(['Asignatura 1', '4']);
+  });
+
+  it('200: separa las equivalencias del historial, cada una unida entre páginas', async () => {
+    const res = await enviar(historialConEquivalencias());
+    expect(res.status).toBe(200);
+    const { historial } = (await res.json()) as ExtractionResult;
+
+    expect(historial.clases?.columns).toEqual(COLUMNAS_HISTORIAL);
+    expect(historial.clases?.rows.map((f) => f.cells[0])).toEqual(Array.from({ length: 20 }, (_, i) => `MAT-${101 + i}`));
+    expect(historial.equivalencias).toEqual({
+      columns: COLUMNAS_EQUIVALENCIAS,
+      rows: [1, 2, 3].map((n) => ({
+        page: n === 3 ? 3 : 2,
+        cells: [`EQ-${n}`, `Equivalente ${n}`, 'Universidad Anterior', `Curso origen ${n}`, '80'],
+      })),
+    });
+    expect(historial.faltantes).toEqual([]);
+  });
+
+  it('200: título "Equivalencias" al pie de la página y su tabla (mismas columnas) en la siguiente', async () => {
+    const { historial } = (await (await enviar(equivalenciasConTituloAlPie())).json()) as ExtractionResult;
+    expect(historial.clases?.rows.map((f) => f.cells[0])).toEqual(['MAT-101', 'ESP-101']);
+    expect(historial.equivalencias?.columns).toEqual(COLUMNAS_HISTORIAL);
+    expect(historial.equivalencias?.rows.map((f) => [f.page, f.cells[0]])).toEqual([
+      [2, 'SOC-101'],
+      [2, 'ING-101'],
+    ]);
+  });
+
+  it('200: título de equivalencias partido por espacios de más y filas con celdas vacías', async () => {
+    const { historial } = (await (await enviar(equivalenciasConTituloPartidoYCeldasVacias())).json()) as ExtractionResult;
+    expect(historial.clases?.rows.map((f) => f.cells[0])).toEqual(['MAT-101']);
+    expect(historial.equivalencias?.rows.map((f) => f.cells)).toEqual([
+      ['EQ-101', 'Contabilidad', '4', '', '', '', '80', 'EQV'],
+      ['EQ-102', 'Economía', '3', '0100', '2023', '2', '75', 'EQV'],
+    ]);
+  });
+
+  it('200: estructura del historial real (encabezado de equivalencias en dos líneas, título al pie)', async () => {
+    const { historial } = (await (await enviar(equivalenciasEstiloUnah())).json()) as ExtractionResult;
+    expect(historial.clases?.rows.map((f) => f.cells[0])).toEqual(['MM110', 'MM111']);
+    expect(historial.equivalencias?.columns).toEqual(COLUMNAS_EQUIVALENCIAS_UNAH);
+    expect(historial.equivalencias?.rows.map((f) => f.cells)).toEqual([
+      ['EE101', 'ESPAÑOL', 'EG011', 'ESPANOL GENERAL'],
+      ['SC101', 'SOCIOLOGIA', 'SC101', 'SOCIOLOGIA'],
+      ['HH101', 'HISTORIA DE HONDURAS', 'HH101', 'HISTORIA DE HONDURAS'],
+      ['FF101', 'FILOSOFIA', 'FF101', 'FILOSOFIA I'],
+      ['IN101', 'INGLES I', 'IN101', 'INGLES I'],
+    ]);
+  });
+
+  it('200: sin equivalencias en el PDF, `equivalencias` es null', async () => {
+    const { historial } = (await (await enviar(historialMultipagina())).json()) as ExtractionResult;
+    expect(historial.equivalencias).toBeNull();
   });
 
   it('400: sin archivo', async () => {

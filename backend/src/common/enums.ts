@@ -57,6 +57,9 @@ export type EstadoHistorial = (typeof EstadoHistorial)[keyof typeof EstadoHistor
 export const OrigenHistorial = {
   ADMIN: 'ADMIN',
   AUTOREPORTE: 'AUTOREPORTE',
+  // Clase acreditada por equivalencia (cursada en otra institución):
+  // aprobada, sin nota y sin período propio (usa el período reservado "0000").
+  EQUIVALENCIA: 'EQUIVALENCIA',
 } as const;
 export type OrigenHistorial = (typeof OrigenHistorial)[keyof typeof OrigenHistorial];
 

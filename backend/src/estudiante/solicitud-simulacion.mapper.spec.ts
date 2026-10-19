@@ -299,6 +299,8 @@ describe('Mapeo de la solicitud de simulación (HU-05-03)', () => {
       registro('EL-201', { uv: 5, estado: 'EN_CURSO', nota: '80', periodo: '2025-1' }),
       registro('IS-101', { uv: 5, estado: null, nota: '90', periodo: '2025-1' }),
       registro('IS-101', { uv: 5, estado: 'RETIRADA', nota: null, periodo: '2025-1' }),
+      // Equivalencia: aprobada sin nota, período reservado "0000"; no se envía.
+      registro('EG-011', { uv: 4, estado: 'APROBADA', nota: null, periodo: '0000-0', origen: 'EQUIVALENCIA' }),
     ];
     const { solicitud, idPorCodigo } = armarSolicitud(m, inscripciones, registros);
 
@@ -328,7 +330,7 @@ describe('Mapeo de la solicitud de simulación (HU-05-03)', () => {
       expect(idPorCodigo.get('IS-999')).toBe('pmc-v1-IS-999');
     });
 
-    it('notas 0 y 100, nota vacía, EN_CURSO sin nota y estados desconocidos fuera', () => {
+    it('notas 0 y 100, nota vacía, EN_CURSO sin nota; estados desconocidos y equivalencias fuera', () => {
       expect(solicitud.historial.map((h) => [h.codigoClase, h.estado, h.nota])).toEqual([
         ['IS-101', 'REPROBADA', 0],
         ['IS-101', 'APROBADA', 100],

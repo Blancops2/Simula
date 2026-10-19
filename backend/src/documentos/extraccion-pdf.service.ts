@@ -4,15 +4,17 @@ import { ExtractionResult } from './extraccion.types';
 import { InterpretacionService } from './interpretacion.service';
 import { LecturaPdfService } from './lectura-pdf.service';
 import { LimpiezaTextoService } from './limpieza-texto.service';
+import { ReglasHistorialService } from './reglas-historial.service';
 
-// Orquesta extraer → limpiar → interpretar. Todo en memoria: el archivo no
-// se guarda en disco ni en base de datos.
+// Orquesta extraer → limpiar → interpretar → reglas del historial. Todo en
+// memoria: el archivo no se guarda en disco ni en base de datos.
 @Injectable()
 export class ExtraccionPdfService {
   constructor(
     private readonly lectura: LecturaPdfService,
     private readonly limpieza: LimpiezaTextoService,
     private readonly interpretacion: InterpretacionService,
+    private readonly reglasHistorial: ReglasHistorialService,
   ) {}
 
   async extraer(fileName: string, buffer: Buffer): Promise<ExtractionResult> {
@@ -29,6 +31,7 @@ export class ExtraccionPdfService {
 
     const { pages: cleanPages, removed } = this.limpieza.limpiar(documento.pages);
     const { fields, tables } = this.interpretacion.interpretar(cleanPages);
+    const historial = this.reglasHistorial.aplicar(fields, documento.pages, removed);
 
     const cleanLines = cleanPages.reduce((total, p) => total + p.lines.length, 0);
     const cleanText = cleanPages.map((p) => p.lines.map((l) => l.text).join('\n')).join('\n\n');
@@ -52,6 +55,7 @@ export class ExtraccionPdfService {
       cleanPages,
       rawPages: documento.pages,
       cleanText,
+      historial,
     };
   }
 }

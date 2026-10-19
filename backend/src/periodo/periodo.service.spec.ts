@@ -111,3 +111,36 @@ describe('PeriodoService — período actual', () => {
     expect(periodos.get('PER-1')!.estado).toBe(EstadoPeriodo.HABILITADO);
   });
 });
+
+describe('PeriodoService — período reservado "0000" (clases sin período)', () => {
+  const reservado: FilaPeriodo = {
+    idperiodo: 'PER-0000-0',
+    anno: '0000',
+    periodo: '0',
+    estado: EstadoPeriodo.DESHABILITADO,
+    FechaInicio: null,
+    fechaFin: null,
+    periodoActual: false,
+  };
+
+  it('no se puede habilitar, marcar como actual ni editar', async () => {
+    const { servicio, periodos } = crearServicio([reservado, periodo('PER-1', EstadoPeriodo.HABILITADO, true)]);
+
+    await expect(
+      servicio.cambiarEstado('PER-0000-0', { estado: EstadoPeriodo.HABILITADO } as never, ADMIN),
+    ).rejects.toThrow(/reservado/);
+    await expect(servicio.marcarActual('PER-0000-0', ADMIN)).rejects.toThrow(/reservado/);
+    await expect(servicio.actualizar('PER-0000-0', { anno: 2027 } as never)).rejects.toThrow(/reservado/);
+    expect(periodos.get('PER-0000-0')).toMatchObject({ estado: EstadoPeriodo.DESHABILITADO, periodoActual: false, anno: '0000' });
+  });
+
+  it('no aparece en los listados', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const servicio = new PeriodoService({ periodo: { findMany } } as unknown as PrismaService);
+    await servicio.listar();
+    await servicio.listarHabilitados();
+    for (const [args] of findMany.mock.calls) {
+      expect(args.where.anno).toEqual({ not: '0000' });
+    }
+  });
+});

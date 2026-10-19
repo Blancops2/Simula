@@ -7,9 +7,24 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseFilters,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBadRequestResponse,
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOkResponse,
+  ApiOperation,
+  ApiPayloadTooLargeResponse,
+  ApiQuery,
+  ApiTags,
+  ApiUnprocessableEntityResponse,
+} from '@nestjs/swagger';
 import { Role } from '../common/enums';
 import { CurrentUser, RequestUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -19,7 +34,13 @@ import { ActualizarPerfilEstudianteDto } from './dto/actualizar-perfil-estudiant
 import { ListarSimulacionesDto } from './dto/listar-simulaciones.dto';
 import { SimularCargaDto } from './dto/simular-carga.dto';
 import { InscribirClasesDto } from './dto/inscribir-clases.dto';
+import {
+  ArchivoDemasiadoGrandeFilter,
+  OPCIONES_ARCHIVO_PDF,
+  validarArchivoPdf,
+} from '../documentos/extraccion-pdf.controller';
 import { EstudianteService } from './estudiante.service';
+import { GuardarHistorialPdfService } from './guardar-historial-pdf.service';
 
 @ApiTags('estudiante')
 @ApiBearerAuth()
@@ -27,7 +48,10 @@ import { EstudianteService } from './estudiante.service';
 @Roles(Role.ESTUDIANTE)
 @Controller('estudiante')
 export class EstudianteController {
-  constructor(private readonly estudiante: EstudianteService) {}
+  constructor(
+    private readonly estudiante: EstudianteService,
+    private readonly guardarHistorialPdf: GuardarHistorialPdfService,
+  ) {}
 
   @Get('perfil')
   @ApiOperation({ summary: 'Perfil del estudiante autenticado: datos básicos y avance académico.' })
@@ -143,6 +167,38 @@ export class EstudianteController {
   @ApiOperation({ summary: 'Historial de clases cursadas por el estudiante autenticado.' })
   historial(@CurrentUser() user: RequestUser) {
     return this.estudiante.obtenerHistorial(user.userId);
+  }
+
+  @Post('historial/guardar-pdf')
+  @UseFilters(ArchivoDemasiadoGrandeFilter)
+  @UseInterceptors(FileInterceptor('file', OPCIONES_ARCHIVO_PDF))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary', description: 'El mismo PDF ya verificado (máx. 10 MB).' } },
+    },
+  })
+  @ApiOperation({
+    summary:
+      'Guarda el historial académico del PDF ya verificado. El servidor vuelve a extraer el PDF (no recibe datos ' +
+      'del navegador), identifica la carrera por su nombre y la versión de malla (la activa o su versión anterior, ' +
+      'la que más clases coincida; si empatan, la más reciente), asigna esa malla al estudiante y guarda las clases ' +
+      'que existen en ella. Las clases que no están en la malla, con período no registrado o ya cargadas por el ' +
+      'administrador no se guardan y se informan. El PDF no se guarda.',
+  })
+  @ApiOkResponse({ description: 'Resumen: carrera, malla detectada, clases guardadas y no cargadas (con motivo).' })
+  @ApiBadRequestResponse({ description: 'No se adjuntó archivo, no es un PDF, o el PDF está dañado/protegido.' })
+  @ApiPayloadTooLargeResponse({ description: 'El archivo supera 10 MB.' })
+  @ApiUnprocessableEntityResponse({
+    description:
+      'PDF escaneado, sin carrera o tabla de historial, carrera no registrada o ambigua, carrera sin malla activa, ' +
+      'o ninguna clase coincide con sus mallas.',
+  })
+  guardarHistorialDesdePdf(@CurrentUser() user: RequestUser, @UploadedFile() file?: Express.Multer.File) {
+    const fileName = validarArchivoPdf(file);
+    return this.guardarHistorialPdf.guardar(user.userId, fileName, file!.buffer);
   }
 
   @Get('pensum')
