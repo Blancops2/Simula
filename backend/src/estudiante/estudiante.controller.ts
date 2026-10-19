@@ -177,7 +177,7 @@ export class EstudianteController {
     schema: {
       type: 'object',
       required: ['file'],
-      properties: { file: { type: 'string', format: 'binary', description: 'El mismo PDF ya verificado (máx. 10 MB).' } },
+      properties: { file: { type: 'string', format: 'binary', description: 'El mismo PDF ya verificado (máx. 4 MB).' } },
     },
   })
   @ApiOperation({
@@ -190,7 +190,7 @@ export class EstudianteController {
   })
   @ApiOkResponse({ description: 'Resumen: carrera, malla detectada, clases guardadas y no cargadas (con motivo).' })
   @ApiBadRequestResponse({ description: 'No se adjuntó archivo, no es un PDF, o el PDF está dañado/protegido.' })
-  @ApiPayloadTooLargeResponse({ description: 'El archivo supera 10 MB.' })
+  @ApiPayloadTooLargeResponse({ description: 'El archivo supera 4 MB.' })
   @ApiUnprocessableEntityResponse({
     description:
       'PDF escaneado, sin carrera o tabla de historial, carrera no registrada o ambigua, carrera sin malla activa, ' +

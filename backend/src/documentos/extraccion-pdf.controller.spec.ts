@@ -1,6 +1,6 @@
 import { INestApplication, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import * as passport from 'passport';
+import passport from 'passport';
 import { Role } from '../common/enums';
 import { DocumentosModule } from './documentos.module';
 import { ExtractionResult } from './extraccion.types';
@@ -184,11 +184,11 @@ describe('POST /estudiante/historial/extraer-pdf', () => {
     expect((await res.json()).message).toMatch(/dañado/);
   });
 
-  it('413: archivo de más de 10 MB', async () => {
+  it('413: archivo de más de 4 MB', async () => {
     const grande = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(TAMANO_MAXIMO_PDF)]);
     const res = await enviar(grande);
     expect(res.status).toBe(413);
-    expect((await res.json()).message).toMatch(/10 MB/);
+    expect((await res.json()).message).toMatch(/4 MB/);
   });
 
   it('422: PDF sin capa de texto (escaneado)', async () => {

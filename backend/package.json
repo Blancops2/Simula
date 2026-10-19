@@ -2,8 +2,12 @@
   "name": "simula-backend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "nest build",
+    "postinstall": "prisma generate",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
@@ -64,5 +68,12 @@
       "^.+\\.ts$": "ts-jest"
     },
     "testEnvironment": "node"
+  },
+  "allowScripts": {
+    "bcrypt": true,
+    "prisma": true,
+    "@prisma/client": true,
+    "@prisma/engines": true,
+    "@nestjs/core": false
   }
 }

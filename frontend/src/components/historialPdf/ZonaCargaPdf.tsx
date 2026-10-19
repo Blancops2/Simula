@@ -38,7 +38,7 @@ export function ZonaCargaPdf({ deshabilitada, onArchivo }: ZonaCargaPdfProps) {
       onDrop={handleDrop}
     >
       <p className="zona-carga-pdf-titulo">Arrastra aquí el PDF de tu historial académico</p>
-      <p className="zona-carga-pdf-ayuda">PDF digital (no escaneado), máximo 10 MB.</p>
+      <p className="zona-carga-pdf-ayuda">PDF digital (no escaneado), máximo 4 MB.</p>
       <button
         type="button"
         className="btn btn-primary"

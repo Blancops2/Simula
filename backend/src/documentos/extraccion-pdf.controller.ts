@@ -32,11 +32,13 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Role } from '../common/enums';
 import { ExtraccionPdfService } from './extraccion-pdf.service';
 
-export const TAMANO_MAXIMO_PDF = 10 * 1024 * 1024;
+// 4 MB: por debajo del límite de 4.5 MB que Vercel impone a todo el cuerpo de la
+// petición, para que el usuario reciba este 413 y no un error genérico de Vercel.
+export const TAMANO_MAXIMO_PDF = 4 * 1024 * 1024;
 const FIRMA_PDF = '%PDF-';
 
 // Configuración de Multer compartida por los endpoints que reciben el PDF:
-// en memoria (nunca en disco), un solo archivo de hasta 10 MB.
+// en memoria (nunca en disco), un solo archivo de hasta 4 MB.
 export const OPCIONES_ARCHIVO_PDF = { storage: memoryStorage(), limits: { fileSize: TAMANO_MAXIMO_PDF, files: 1 } };
 
 // Valida el archivo recibido y devuelve su nombre. Se valida por contenido
@@ -62,7 +64,7 @@ export class ArchivoDemasiadoGrandeFilter implements ExceptionFilter {
       .switchToHttp()
       .getResponse<Response>()
       .status(413)
-      .json({ statusCode: 413, message: 'El archivo supera el tamaño máximo de 10 MB.', error: 'Payload Too Large' });
+      .json({ statusCode: 413, message: 'El archivo supera el tamaño máximo de 4 MB.', error: 'Payload Too Large' });
   }
 }
 
@@ -83,7 +85,7 @@ export class ExtraccionPdfController {
     schema: {
       type: 'object',
       required: ['file'],
-      properties: { file: { type: 'string', format: 'binary', description: 'PDF digital (máx. 10 MB).' } },
+      properties: { file: { type: 'string', format: 'binary', description: 'PDF digital (máx. 4 MB).' } },
     },
   })
   @ApiOperation({
@@ -97,7 +99,7 @@ export class ExtraccionPdfController {
       'de todas las páginas; además, el resultado genérico (campos, tablas, líneas limpias/descartadas, texto crudo).',
   })
   @ApiBadRequestResponse({ description: 'No se adjuntó archivo, no es un PDF, o el PDF está dañado/protegido con contraseña.' })
-  @ApiPayloadTooLargeResponse({ description: 'El archivo supera 10 MB.' })
+  @ApiPayloadTooLargeResponse({ description: 'El archivo supera 4 MB.' })
   @ApiUnprocessableEntityResponse({ description: 'El PDF no tiene capa de texto (escaneado); no se soporta OCR.' })
   extraer(@UploadedFile() file?: Express.Multer.File) {
     const fileName = validarArchivoPdf(file);

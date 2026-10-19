@@ -8,7 +8,7 @@ import { ZonaCargaPdf } from '../components/historialPdf/ZonaCargaPdf';
 import type { ExtractionResult } from '../estudiante/extraccionPdf.types';
 import type { ResultadoGuardadoHistorial } from '../estudiante/types';
 
-const TAMANO_MAXIMO = 10 * 1024 * 1024;
+const TAMANO_MAXIMO = 4 * 1024 * 1024;
 
 // Solo se guarda el nombre y el tamaño del archivo, nunca el File: así el
 // PDF no queda retenido en memoria por el estado de la página. El único que
@@ -34,7 +34,7 @@ type Guardado =
 
 const MENSAJE_POR_ESTADO: Record<number, string> = {
   400: 'El archivo no es un PDF válido, está dañado o protegido con contraseña.',
-  413: 'El archivo supera el tamaño máximo de 10 MB.',
+  413: 'El archivo supera el tamaño máximo de 4 MB.',
   422: 'El PDF no tiene texto seleccionable (parece escaneado). Solo se admiten PDF digitales.',
 };
 

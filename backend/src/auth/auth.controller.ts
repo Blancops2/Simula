@@ -99,7 +99,9 @@ export class AuthController {
       httpOnly: true,
       secure: this.config.get<string>('COOKIE_SECURE') === 'true',
       sameSite: 'lax',
-      path: REFRESH_COOKIE_PATH,
+      // Configurable porque detrás del proxy del frontend (/api/* -> backend) el
+      // navegador ve la ruta /api/auth, no /auth.
+      path: this.config.get<string>('REFRESH_COOKIE_PATH') || REFRESH_COOKIE_PATH,
     };
   }
 }
